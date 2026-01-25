@@ -1,504 +1,408 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
-// --- КОНСТАНТЫ ---
 const API = 'https://shikimori.one/api';
 const ASSETS = 'https://shikimori.one';
 
 const GENRES = [
   { id: 1, name: 'Сёнен', icon: '🔥' }, { id: 4, name: 'Комедия', icon: '😂' },
   { id: 10, name: 'Фэнтези', icon: '🧙' }, { id: 2, name: 'Приключения', icon: '🗺️' },
-  { id: 8, name: 'Драма', icon: '😢' }, { id: 14, name: 'Хоррор', icon: '👻' },
-  { id: 7, name: 'Мистика', icon: '🔮' }, { id: 24, name: 'Фантастика', icon: '🚀' },
-  { id: 37, name: 'Сверхъестественное', icon: '✨' }, { id: 22, name: 'Романтика', icon: '❤️' }
+  { id: 8, name: 'Драма', icon: '😢' }, { id: 7, name: 'Мистика', icon: '🔮' },
+  { id: 24, name: 'Фантастика', icon: '🚀' }, { id: 22, name: 'Романтика', icon: '❤️' },
+  { id: 6, name: 'Демоны', icon: '👿' }, { id: 11, name: 'Игры', icon: '🎮' }
 ];
 
 const App = () => {
-  const [view, setView] = useState('home'); 
+  const [view, setView] = useState('home');
   const [content, setContent] = useState([]);
+  const [trending, setTrending] = useState([]);
   const [selectedItem, setSelectedItem] = useState(null);
   const [loading, setLoading] = useState(true);
-
-  // --- LOCAL STORAGE BILAN BOG'LANGAN STATE-LAR ---
-  
-  // Dark Mode holatini xotiradan olish
-  const [isDarkMode, setIsDarkMode] = useState(() => {
-    const savedTheme = localStorage.getItem('aniHub_theme_v3');
-    return savedTheme ? JSON.parse(savedTheme) : true;
-  });
-
-  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeGenre, setActiveGenre] = useState(null);
   const [page, setPage] = useState(1);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [showToast, setShowToast] = useState(false);
+  const fileInputRef = useRef(null);
 
-  const [library, setLibrary] = useState(() => {
-    const saved = localStorage.getItem('aniHub_library_v3');
-    return saved ? JSON.parse(saved) : {}; 
+  const [isDarkMode, setIsDarkMode] = useState(() => JSON.parse(localStorage.getItem('aniHub_theme_v4')) ?? true);
+  const [library, setLibrary] = useState(() => JSON.parse(localStorage.getItem('aniHub_lib_v4')) ?? {});
+  const [history, setHistory] = useState(() => JSON.parse(localStorage.getItem('aniHub_hist_v4')) ?? []);
+  const [ratings, setRatings] = useState(() => JSON.parse(localStorage.getItem('aniHub_ratings_v4')) ?? {});
+  const [user, setUser] = useState(() => JSON.parse(localStorage.getItem('aniHub_user_v4')) ?? {
+    name: 'Кибер_Пользователь',
+    avatar: 'https://api.dicebear.com/7.x/pixel-art/svg?seed=Shizo',
+    bio: 'Жизнь в стиле Киберпанк',
+    xp: 0
   });
 
-  const [history, setHistory] = useState(() => {
-    const saved = localStorage.getItem('aniHub_history_v3');
-    return saved ? JSON.parse(saved) : []; 
-  });
-
-  const [user, setUser] = useState(() => {
-    const saved = localStorage.getItem('aniHub_user_v3');
-    return saved ? JSON.parse(saved) : { 
-      name: 'ShizoFan', 
-      avatar: 'https://api.dicebear.com/7.x/pixel-art/svg?seed=Shizo',
-      bio: 'Аниме — это жизнь'
-    };
-  });
-
-  // Ma'lumotlarni xotiraga yozish (isDarkMode ham qo'shildi)
   useEffect(() => {
-    localStorage.setItem('aniHub_library_v3', JSON.stringify(library));
-    localStorage.setItem('aniHub_history_v3', JSON.stringify(history));
-    localStorage.setItem('aniHub_user_v3', JSON.stringify(user));
-    localStorage.setItem('aniHub_theme_v3', JSON.stringify(isDarkMode));
-  }, [library, history, user, isDarkMode]);
+    localStorage.setItem('aniHub_lib_v4', JSON.stringify(library));
+    localStorage.setItem('aniHub_hist_v4', JSON.stringify(history));
+    localStorage.setItem('aniHub_user_v4', JSON.stringify(user));
+    localStorage.setItem('aniHub_theme_v4', JSON.stringify(isDarkMode));
+    localStorage.setItem('aniHub_ratings_v4', JSON.stringify(ratings));
+  }, [library, history, user, isDarkMode, ratings]);
 
-  // --- ФУНКЦИИ (O'zgarmadi) ---
-  const updateStatus = (item, status) => {
-    setLibrary(prev => ({
-      ...prev,
-      [item.id]: { 
-        id: item.id, 
-        status, 
-        name: item.russian || item.name, 
-        image: item.image?.original || item.image,
-        score: item.score,
-        kind: item.kind
-      }
-    }));
-  };
+  useEffect(() => {
+    if (history.length > 0) {
+      setShowToast(true);
+      const timer = setTimeout(() => setShowToast(false), 6000);
+      return () => clearTimeout(timer);
+    }
+  }, []);
 
-  const addToHistory = (item) => {
-    const newItem = { 
-      id: item.id, 
-      name: item.russian || item.name, 
-      image: item.image?.original || item.image,
-      date: new Date().toLocaleString('ru-RU'),
-      type: view === 'manga' ? 'Манга' : 'Аниме'
-    };
-    setHistory(prev => [newItem, ...prev.filter(h => h.id !== item.id)].slice(0, 30));
-  };
-
-  const removeFromHistory = (id) => {
-    setHistory(prev => prev.filter(item => item.id !== id));
+  const getImg = (item) => {
+    if (!item?.image) return 'https://via.placeholder.com/225x320?text=No+Image';
+    const path = item.image.original || (typeof item.image === 'string' ? item.image : '');
+    return path.startsWith('http') ? path : ASSETS + path;
   };
 
   const fetchData = async () => {
     setLoading(true);
     try {
-      let endpoint = view === 'manga' ? 'mangas' : 'animes';
-      let url = `${API}/${endpoint}?limit=50&page=${page}&order=popularity`;
-      
+      const endpoint = view === 'manga' ? 'mangas' : 'animes';
+      const order = view === 'top' ? 'ranked' : 'popularity';
+      let url = `${API}/${endpoint}?limit=24&page=${page}&order=${order}`;
       if (searchQuery) url += `&search=${encodeURIComponent(searchQuery)}`;
       if (activeGenre) url += `&genre=${activeGenre}`;
-      if (view === 'top') url += `&order=ranked`;
 
       const res = await fetch(url);
       const data = await res.json();
       setContent(Array.isArray(data) ? data : []);
+
+      if (trending.length === 0) {
+        const trendRes = await fetch(`${API}/animes?limit=15&order=popularity`);
+        const trendData = await trendRes.json();
+        setTrending(trendData);
+      }
     } catch (err) {
-      console.error("Ошибка:", err);
-      setContent([]);
+      console.error("Fetch Error:", err);
     } finally {
-      setLoading(false);
+      setTimeout(() => setLoading(false), 800);
     }
   };
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      fetchData();
-    }, 400);
-    return () => clearTimeout(timer);
+    if (view !== 'collection' && view !== 'history' && view !== 'trending_list') fetchData();
+    else setLoading(false);
   }, [view, searchQuery, activeGenre, page]);
 
-  if (loading && content.length === 0) {
-    return (
-      <div className="h-screen w-full flex flex-col items-center justify-center bg-[#050505]">
-        <div className="relative">
-          <div className="w-24 h-24 border-4 border-green-500/20 rounded-full"></div>
-          <div className="w-24 h-24 border-t-4 border-green-500 rounded-full animate-spin absolute top-0 left-0"></div>
-        </div>
-        <h2 className="text-green-500 font-black italic mt-6 tracking-[0.5em] animate-pulse">ANIHUB</h2>
-      </div>
-    );
-  }
+  const handleRating = (item, score) => {
+    setRatings(prev => ({ ...prev, [item.id]: score }));
+    if (!library[item.id]) updateLibraryStatus(item, 'planned');
+  };
+
+  const addToHistory = (item) => {
+    const newItem = { ...item, date: new Date().toLocaleString(), timestamp: Date.now() };
+    setHistory(prev => [newItem, ...prev.filter(h => h.id !== item.id)].slice(0, 40));
+    setUser(prev => ({ ...prev, xp: prev.xp + 5 }));
+  };
+
+  const updateLibraryStatus = (item, status) => {
+    setLibrary(prev => ({ ...prev, [item.id]: { ...item, status } }));
+  };
+
+  const handleAvatarChange = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => setUser({ ...user, avatar: reader.result });
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const getStatusLabel = (id) => {
+    const map = { watching: 'Смотрю', planned: 'В планах', completed: 'Завершено' };
+    return library[id]?.status ? map[library[id].status] : null;
+  };
+
+  const displayContent = () => {
+    if (view === 'collection') return Object.values(library);
+    if (view === 'history') return history;
+    if (view === 'trending_list') return trending;
+    return content;
+  };
+
+  const finalContent = displayContent();
 
   return (
-    <div className={`min-h-screen font-sans transition-colors duration-700 ${isDarkMode ? 'bg-[#050505] text-white' : 'bg-[#f8fafc] text-slate-900'}`}>
+    <div className={`min-h-screen font-sans transition-all duration-700 ${isDarkMode ? 'bg-[#0a0a0f] text-white' : 'bg-gradient-to-br from-[#f0f2f5] to-[#e0e7ff] text-slate-900'}`}>
       
-      {/* ДИНАМИЧЕСКИЙ ФОН */}
-      <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden">
-          <div className={`absolute inset-0 transition-opacity duration-1000 ${isDarkMode ? 'opacity-[0.15]' : 'opacity-[0.05]'}`}>
-             <img src="https://images.alphacoders.com/132/1323334.png" className="w-full h-full object-cover blur-md scale-110" alt="" />
-          </div>
-          <div className={`absolute inset-0 ${isDarkMode ? 'bg-gradient-to-b from-transparent via-[#050505] to-[#050505]' : 'bg-gradient-to-b from-white/50 to-white'}`}></div>
-      </div>
+      <style>{`
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(30px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes scroll { 0% { transform: translateX(0); } 100% { transform: translateX(calc(-320px * 15 - 2.5rem * 15)); } }
+        .animate-fade-in { animation: fadeIn 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; }
+        .animate-infinite-scroll { display: flex; width: max-content; animation: scroll 40s linear infinite; }
+        .animate-infinite-scroll:hover { animation-play-state: paused; }
+        .glass { backdrop-filter: blur(20px); background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-thumb { background: linear-gradient(#ff00ff, #00ffff); border-radius: 10px; }
+      `}</style>
 
-  {/* ХЕДЕР */}
-<header className={`sticky top-0 z-[100] backdrop-blur-3xl border-b transition-all ${isDarkMode ? 'bg-black/60 border-white/5' : 'bg-white/70 border-slate-200'}`}>
-  <div className="max-w-[1800px] mx-auto p-4 md:px-8 flex flex-col gap-4"> 
-    
-    <div className="flex items-center justify-between gap-6">
-      <div className="flex items-center gap-8">
-        <div className="flex items-center gap-3 cursor-pointer group" onClick={() => {setView('home'); setActiveGenre(null); setPage(1)}}>
-          <div className="w-12 h-12 bg-green-500 rounded-2xl flex items-center justify-center font-black text-black text-2xl shadow-[0_0_30px_rgba(34,197,94,0.5)] group-hover:rotate-[360deg] transition-transform duration-700">A</div>
-          <h1 className="text-2xl font-black uppercase italic tracking-tighter hidden xl:block">Ani<span className="text-green-500 underline decoration-2 underline-offset-4">Hub</span></h1>
-        </div>
+      {/* Header */}
+      <header className={`sticky top-0 z-[1000] glass border-b ${isDarkMode ? 'border-white/10' : 'border-slate-200'} backdrop-blur-2xl`}>
+        <div className="max-w-[1920px] mx-auto px-4 md:px-6 py-4 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-4 md:gap-10 shrink-0">
+            <div onClick={() => { setView('home'); setPage(1); }} className="flex items-center gap-3 cursor-pointer group">
+              <div className="w-10 h-10 md:w-14 md:h-14 bg-gradient-to-br from-[#ff00ff] to-[#00ffff] rounded-xl md:rounded-2xl flex items-center justify-center shadow-[0_0_20px_rgba(255,0,255,0.5)]">
+                <span className="text-xl md:text-3xl font-black text-white">A</span>
+              </div>
+              <h1 className="text-xl md:text-3xl font-black tracking-tighter uppercase hidden sm:block">
+                ANI<span className="text-[#ff00ff]">HUB</span>
+              </h1>
+            </div>
 
-        <a href="https://t.me/Sh1zoK1ll" target="_blank" rel="noreferrer" 
-           className="hidden md:flex items-center gap-3 bg-white/5 hover:bg-white/10 border border-white/10 px-5 py-2.5 rounded-2xl text-[10px] font-black tracking-widest transition-all">
-          <span className="w-2 h-2 bg-blue-500 rounded-full animate-ping"></span>
-          РАЗРАБОТАНО SHIZO
-        </a>
-      </div>
-
-      <div className="flex-1 max-w-xl hidden lg:block">
-        <div className="relative group">
-          <i className="fas fa-search absolute left-5 top-1/2 -translate-y-1/2 text-gray-500 group-focus-within:text-green-500 transition-colors"></i>
-          <input 
-            type="text" 
-            placeholder="Поиск по вселенной аниме..." 
-            className={`w-full pl-14 pr-6 py-3.5 rounded-2xl outline-none border-2 transition-all ${isDarkMode ? 'bg-white/5 border-transparent focus:border-green-500/30 focus:bg-white/10' : 'bg-slate-100 border-transparent focus:border-green-500/30 focus:bg-white'}`}
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
-        </div>
-      </div>
-
-      <div className="flex items-center gap-3">
-        <button 
-          onClick={() => setIsDarkMode(!isDarkMode)} 
-          className={`w-12 h-12 rounded-2xl border flex items-center justify-center hover:scale-110 active:scale-95 transition-all shadow-lg ${isDarkMode ? 'bg-white/10 border-white/10 text-yellow-500 shadow-yellow-500/10' : 'bg-slate-800 border-slate-700 text-indigo-400 shadow-indigo-500/20'}`}
-          title={isDarkMode ? "Svetni yoqish" : "Svetni o'chirish"}
-        >
-          <i className={`fas ${isDarkMode ? 'fa-sun' : 'fa-moon'} text-xl`}></i>
-        </button>
-
-        <div onClick={() => setIsProfileModalOpen(true)} className="flex items-center gap-3 cursor-pointer bg-green-500/10 p-1 pr-4 rounded-2xl border border-green-500/20 hover:bg-green-500/20 transition-all">
-          <img src={user.avatar} className="w-10 h-10 rounded-xl object-cover border-2 border-green-500 shadow-lg shadow-green-500/20" alt="" />
-          <span className="font-black text-xs hidden sm:block truncate max-w-[100px] uppercase italic">{user.name}</span>
-        </div>
-      </div>
-    </div>
-
-    <div className="block lg:hidden w-full pb-2">
-      <div className="relative">
-        <i className="fas fa-search absolute left-5 top-1/2 -translate-y-1/2 text-gray-500"></i>
-        <input 
-          type="text" 
-          placeholder="Поиск аниме..." 
-          className={`w-full pl-12 pr-4 py-3 rounded-xl outline-none border-2 transition-all ${isDarkMode ? 'bg-white/5 border-white/5 focus:border-green-500/30' : 'bg-slate-100 border-slate-200 focus:border-green-500/30'}`}
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-        />
-      </div>
-    </div>
-
-  </div>
-</header>
-
-      <div className="relative z-10 max-w-[1800px] mx-auto p-4 md:p-8 flex flex-col lg:flex-row gap-8">
-        
-        {/* САЙДБАР */}
-        <aside className="w-full lg:w-80 shrink-0 space-y-6">
-          <div className={`p-4 rounded-[32px] border ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-white border-slate-200 shadow-xl'}`}>
-            <p className="text-[10px] font-black uppercase text-gray-500 tracking-[0.3em] mb-4 ml-4">Вселенная</p>
-            <nav className="flex flex-col gap-1">
-              {[
-                { id: 'home', n: 'Сериалы', i: 'fa-play' },
-                { id: 'manga', n: 'Манга / Новеллы', i: 'fa-book-open' },
-                { id: 'top', n: 'Рейтинг Топ', i: 'fa-crown' },
-                { id: 'library', n: 'Моя Полка', i: 'fa-bookmark' },
-                { id: 'history', n: 'История', i: 'fa-history' }
-              ].map(nav => (
-                <button 
-                  key={nav.id} 
-                  onClick={() => {setView(nav.id); setActiveGenre(null); setPage(1)}} 
-                  className={`flex items-center gap-4 px-6 py-4 rounded-2xl font-black text-xs uppercase tracking-widest transition-all duration-500 ${view === nav.id ? 'bg-green-500 text-black shadow-[0_15px_30px_rgba(34,197,94,0.3)] translate-x-2' : 'hover:bg-white/5 opacity-60 hover:opacity-100'}`}>
-                  <i className={`fas ${nav.i} w-5`}></i> {nav.n}
+            {/* Desktop Nav */}
+            <nav className="hidden xl:flex gap-6">
+              {['home', 'manga', 'top', 'trending_list', 'collection', 'history'].map(m => (
+                <button
+                  key={m}
+                  onClick={() => setView(m)}
+                  className={`text-xs font-black uppercase tracking-wider transition-all relative group ${view === m ? 'text-[#ff00ff]' : 'opacity-60 hover:opacity-100'}`}
+                >
+                  {m === 'home' ? 'Главная' : m === 'manga' ? 'Манга' : m === 'top' ? 'Топ' : m === 'trending_list' ? 'Тренды' : m === 'collection' ? 'Коллекция' : 'История'}
                 </button>
               ))}
             </nav>
           </div>
 
-          <div className={`p-6 rounded-[32px] border ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-white border-slate-200'}`}>
-            <p className="text-[10px] font-black uppercase text-green-500 tracking-[0.3em] mb-6">Жанры</p>
-            <div className="grid grid-cols-2 gap-2">
+          <div className="flex-1 max-w-xl mx-2 md:mx-10">
+            <input
+              type="text"
+              placeholder="Поиск..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className={`w-full py-2.5 md:py-4 px-4 md:px-6 rounded-xl md:rounded-2xl glass border-2 transition-all font-bold text-xs md:text-sm ${isDarkMode ? 'bg-white/5 border-transparent focus:border-[#ff00ff]' : 'bg-white border-slate-200'}`}
+            />
+          </div>
+
+          <div className="flex items-center gap-3 md:gap-6 shrink-0">
+            <button onClick={() => setIsDarkMode(!isDarkMode)} className="w-10 h-10 md:w-12 md:h-12 rounded-xl md:rounded-2xl glass flex items-center justify-center text-lg hover:bg-[#ff00ff]/20">
+              {isDarkMode ? '☀️' : '🌙'}
+            </button>
+            <div onClick={() => setIsProfileModalOpen(true)} className="flex items-center cursor-pointer">
+              <img src={user.avatar} className="w-10 h-10 md:w-12 md:h-12 rounded-xl md:rounded-2xl object-cover border-2 border-[#ff00ff]" alt="" />
+            </div>
+          </div>
+        </div>
+
+        {/* MOBILE NAV - Trending, Collection, History included here */}
+        <div className="xl:hidden flex overflow-x-auto no-scrollbar gap-4 px-4 py-3 border-t border-white/5">
+           {['home', 'manga', 'top', 'trending_list', 'collection', 'history'].map(m => (
+              <button
+                key={m}
+                onClick={() => setView(m)}
+                className={`text-[10px] font-black uppercase whitespace-nowrap px-4 py-2 rounded-lg ${view === m ? 'bg-[#ff00ff] text-white' : 'bg-white/5 opacity-60'}`}
+              >
+                {m === 'home' ? 'Главная' : m === 'manga' ? 'Манга' : m === 'top' ? 'Топ' : m === 'trending_list' ? 'Тренды' : m === 'collection' ? 'Коллекция' : 'История'}
+              </button>
+            ))}
+        </div>
+      </header>
+
+      {/* Trending SECTION WITH INFINITE ANIMATION */}
+      {view === 'home' && !searchQuery && page === 1 && (
+        <section className="mt-10 overflow-hidden py-4 md:py-10">
+          <div className="px-6 md:px-10 mb-6">
+            <h3 className="text-2xl md:text-4xl font-black italic uppercase tracking-tighter bg-gradient-to-r from-[#ff00ff] to-[#00ffff] inline-block text-transparent bg-clip-text">Сейчас в тренде</h3>
+          </div>
+          <div className="relative">
+            <div className="animate-infinite-scroll flex gap-10">
+              {/* Ikki marta aylantiramizki, uzilish bo'lmasin */}
+              {[...trending, ...trending].map((item, i) => (
+                <div key={`${item.id}-${i}`} onClick={() => { setSelectedItem(item); addToHistory(item); }} className="w-64 md:w-80 group cursor-pointer relative shrink-0">
+                  <div className="relative aspect-video rounded-2xl md:rounded-[32px] overflow-hidden glass border-2 border-transparent group-hover:border-[#ff00ff] transition-all duration-500">
+                    <img src={getImg(item)} className="w-full h-full object-cover" alt="" />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent" />
+                    <div className="absolute bottom-4 left-4">
+                      <h4 className="text-sm md:text-lg font-black text-white truncate w-56">{item.russian || item.name}</h4>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
+      {/* Main Grid */}
+      <div className="max-w-[1920px] mx-auto px-4 md:px-10 py-8 md:py-12 flex flex-col lg:flex-row gap-10">
+        <aside className="w-full lg:w-80 shrink-0 space-y-6">
+          <div className="glass p-6 md:p-8 rounded-3xl md:rounded-[40px] sticky top-32 border-white/5">
+            <p className="text-xs font-black uppercase opacity-50 mb-6 tracking-[0.2em] text-center">Категории</p>
+            <div className="grid grid-cols-2 lg:grid-cols-1 gap-3">
+              <button onClick={() => setActiveGenre(null)} className={`py-3 md:py-4 rounded-xl md:rounded-2xl text-[10px] md:text-sm font-black uppercase transition-all ${!activeGenre ? 'bg-gradient-to-r from-[#ff00ff] to-[#00ffff] text-white' : 'bg-white/5'}`}>🌈 Все жанры</button>
               {GENRES.map(g => (
-                <button 
-                  key={g.id} 
-                  onClick={() => {setActiveGenre(g.id); setView('home'); setPage(1)}}
-                  className={`px-3 py-3 rounded-xl text-[10px] font-black uppercase transition-all flex items-center gap-2 border ${activeGenre === g.id ? 'bg-green-500 border-green-500 text-black' : 'bg-white/5 border-transparent hover:border-green-500/50'}`}>
-                  <span>{g.icon}</span> <span className="truncate">{g.name}</span>
+                <button key={g.id} onClick={() => setActiveGenre(g.id)} className={`py-3 md:py-4 rounded-xl md:rounded-2xl text-[10px] md:text-sm font-black uppercase transition-all ${activeGenre === g.id ? 'bg-gradient-to-r from-[#ff00ff] to-[#00ffff] text-white' : 'bg-white/5'}`}>
+                  {g.icon} {g.name}
                 </button>
               ))}
             </div>
-            {activeGenre && (
-              <button onClick={() => setActiveGenre(null)} className="w-full mt-4 py-3 bg-red-500/10 text-red-500 rounded-xl text-[10px] font-black uppercase hover:bg-red-500 hover:text-white transition-all">Сбросить</button>
-            )}
+            
+            {/* TELEGRAM LINK UNDER GENRES */}
+            <div className="mt-6 md:mt-8 pt-6 md:pt-8 border-t border-white/10">
+              <a 
+                href="https://t.me/Sh1zoK1ll" 
+                target="_blank" 
+                rel="noreferrer" 
+                className="flex items-center justify-center gap-3 w-full py-4 rounded-xl md:rounded-2xl bg-[#0088cc] hover:brightness-110 transition-all shadow-lg"
+              >
+                <span className="text-xl">✈️</span>
+                <div className="text-left">
+                  <p className="text-[9px] font-black uppercase text-white/70 leading-none">Developer</p>
+                  <p className="text-xs md:text-sm font-black text-white">@Sh1zoK1ll</p>
+                </div>
+              </a>
+            </div>
           </div>
         </aside>
 
-        {/* КОНТЕНТ */}
         <main className="flex-1">
-          <div className="mb-12 flex flex-col md:flex-row md:items-end justify-between gap-6">
-            <div className="space-y-2">
-              <h2 className="text-6xl font-black italic uppercase tracking-tighter leading-none">
-                {view === 'home' && (activeGenre ? `Жанр: ${GENRES.find(g => g.id === activeGenre)?.name}` : 'Популярное')}
-                {view === 'manga' && 'Манга'}
-                {view === 'top' && 'Легенды'}
-                {view === 'library' && 'Полка'}
-                {view === 'history' && 'История'}
-              </h2>
-              <div className="flex items-center gap-3">
-                 <div className="h-2 w-32 bg-green-500 rounded-full shadow-[0_0_20px_rgba(34,197,94,0.5)]"></div>
-                 <span className="text-[10px] font-black uppercase opacity-40 italic">Найдено: {content.length} ед.</span>
+          <div className="flex flex-col md:flex-row items-center justify-between mb-8 md:mb-12 gap-6">
+            <h2 className="text-3xl md:text-5xl lg:text-7xl font-black italic uppercase tracking-tighter bg-gradient-to-r from-[#ff00ff] to-[#00ffff] inline-block text-transparent bg-clip-text">
+              {view === 'history' ? 'История' : view === 'collection' ? 'Коллекция' : view === 'manga' ? 'Манга' : view === 'trending_list' ? 'Тренды' : 'Каталог'}
+            </h2>
+            {['home', 'manga', 'top'].includes(view) && (
+              <div className="flex items-center gap-4 bg-white/5 p-2 md:p-3 rounded-2xl md:rounded-[30px] border border-white/10">
+                <button onClick={() => setPage(p => Math.max(1, p - 1))} className="w-10 h-10 md:w-14 md:h-14 rounded-lg md:rounded-2xl glass flex items-center justify-center text-xl md:text-3xl hover:text-[#ff00ff]">‹</button>
+                <div className="w-10 h-10 md:w-14 md:h-14 rounded-lg md:rounded-2xl bg-gradient-to-r from-[#ff00ff] to-[#00ffff] flex items-center justify-center font-black text-sm md:text-xl text-white">{page}</div>
+                <button onClick={() => setPage(p => p + 1)} className="w-10 h-10 md:w-14 md:h-14 rounded-lg md:rounded-2xl glass flex items-center justify-center text-xl md:text-3xl hover:text-[#ff00ff]">›</button>
               </div>
-            </div>
+            )}
           </div>
 
-          {/* СИСТЕМА СЕТКИ */}
-          {view === 'library' ? (
-            <div className="space-y-16">
-               {['watching', 'planned', 'completed', 'dropped'].map(cat => {
-                 const items = Object.values(library).filter(i => i.status === cat);
-                 if (items.length === 0) return null;
-                 return (
-                   <div key={cat} className="animate-in slide-in-from-bottom-10 duration-700">
-                     <h3 className="text-xl font-black uppercase italic mb-8 flex items-center gap-4">
-                        <span className="w-2 h-8 bg-green-500 rounded-full"></span>
-                        {cat === 'watching' ? 'Смотрю' : cat === 'planned' ? 'В планах' : cat === 'completed' ? 'Завершено' : 'Брошено'}
-                        <span className="text-green-500/40 text-sm font-normal">/ {items.length}</span>
-                     </h3>
-                     <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
-                        {items.map(item => (
-                          <div key={item.id} onClick={() => setSelectedItem(item)} className="group cursor-pointer">
-                             <div className="relative aspect-[3/4.2] rounded-[24px] overflow-hidden border-2 border-white/5 group-hover:border-green-500 transition-all duration-500 group-hover:shadow-[0_0_40px_rgba(34,197,94,0.2)]">
-                                <img src={ASSETS + item.image} className="w-full h-full object-cover group-hover:scale-110 transition-all duration-700" alt="" />
-                                <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-80" />
-                             </div>
-                             <h4 className="mt-4 font-black text-[11px] uppercase italic truncate group-hover:text-green-500 transition-colors px-2">{item.name}</h4>
-                          </div>
-                        ))}
-                     </div>
-                   </div>
-                 )
-               })}
-            </div>
-          ) : view === 'history' ? (
-            <div className="grid gap-4 max-w-4xl">
-               {history.map((h, i) => (
-                 <div key={i} className="group flex items-center gap-6 p-4 rounded-[24px] border border-white/5 bg-white/5 hover:bg-white/10 transition-all">
-                    <img src={ASSETS + h.image} className="w-16 h-20 shrink-0 rounded-xl object-cover shadow-xl" alt="" />
-                    <div className="flex-1">
-                        <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-md mb-2 inline-block ${h.type === 'Манга' ? 'bg-orange-500 text-black' : 'bg-blue-500 text-white'}`}>{h.type}</span>
-                        <h3 className="text-lg font-black italic line-clamp-1 uppercase">{h.name}</h3>
-                        <p className="text-[10px] opacity-40 font-bold uppercase">{h.date}</p>
-                    </div>
-                    <div className="flex gap-2">
-                      <button onClick={() => setSelectedItem(h)} className="w-12 h-12 bg-green-500 text-black rounded-xl flex items-center justify-center hover:scale-110 transition-all"><i className="fas fa-play"></i></button>
-                      <button onClick={() => removeFromHistory(h.id)} className="w-12 h-12 bg-white/5 text-red-500 rounded-xl flex items-center justify-center hover:bg-red-500 hover:text-white transition-all"><i className="fas fa-trash"></i></button>
-                    </div>
-                 </div>
-               ))}
+          {loading ? (
+            <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4 md:gap-8">
+              {[...Array(10)].map((_, i) => <div key={i} className="aspect-[3/4.5] rounded-2xl md:rounded-[40px] bg-white/5 animate-pulse" />)}
             </div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6 md:gap-8">
-              {content.map((item, index) => (
-                <div 
-                  key={item.id} 
-                  onClick={() => {setSelectedItem(item); addToHistory(item)}}
-                  className="group cursor-pointer relative animate-in fade-in zoom-in duration-500"
-                  style={{ animationDelay: `${(index % 15) * 50}ms` }}
-                >
-                  <div className={`relative aspect-[3/4.5] rounded-[28px] overflow-hidden border-2 transition-all duration-700 group-hover:-translate-y-4 ${isDarkMode ? 'border-white/5 group-hover:border-green-500 group-hover:shadow-[0_20px_60px_rgba(0,0,0,0.8)]' : 'border-slate-200'}`}>
-                    <img src={ASSETS + item.image.original} className="w-full h-full object-cover transition-transform duration-1000 group-hover:scale-110" alt="" />
+            <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4 md:gap-8">
+              {finalContent.map((item, idx) => (
+                <div key={`${item.id}-${idx}`} onClick={() => { setSelectedItem(item); addToHistory(item); }} className="group relative cursor-pointer animate-fade-in" style={{ animationDelay: `${idx * 20}ms` }}>
+                  <div className="relative aspect-[3/4.5] rounded-2xl md:rounded-[40px] overflow-hidden glass border-2 border-transparent group-hover:border-[#ff00ff] transition-all duration-500 shadow-2xl">
                     
-                    <div className="absolute inset-0 bg-gradient-to-t from-black via-black/20 to-transparent opacity-90 group-hover:opacity-100" />
-                    
-                    <div className="absolute top-4 left-4">
-                       <div className="bg-black/60 backdrop-blur-md px-3 py-1 rounded-full border border-white/10 flex items-center gap-2">
-                          <i className="fas fa-star text-yellow-500 text-[10px]"></i>
-                          <span className="text-white text-[10px] font-black">{item.score}</span>
-                       </div>
-                    </div>
+                    {ratings[item.id] && (
+                      <div className={`absolute top-2 md:top-4 left-2 md:left-4 z-20 px-2 md:px-4 py-1 md:py-2 rounded-lg md:rounded-2xl font-black text-[9px] md:text-xs uppercase text-white bg-gradient-to-r ${ratings[item.id] > 5 ? 'from-[#ff00ff] to-[#00ffff]' : 'from-cyan-500 to-blue-600'}`}>
+                        ⭐ {ratings[item.id]}
+                      </div>
+                    )}
 
-                    <div className="absolute bottom-6 left-6 right-6">
-                       <p className="text-green-500 text-[9px] font-black uppercase tracking-[0.2em] mb-1">{item.kind}</p>
-                       <h3 className="text-white font-black text-sm md:text-md leading-tight uppercase italic line-clamp-2 group-hover:text-green-400 transition-colors">
-                         {item.russian || item.name}
-                       </h3>
+                    <img src={getImg(item)} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" alt="" />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-transparent to-transparent opacity-80" />
+                    <div className="absolute bottom-4 md:bottom-6 left-4 md:left-6 right-4 md:right-6">
+                      <p className="text-[8px] md:text-[10px] font-black text-[#ff00ff] uppercase mb-1">{item.kind}</p>
+                      <h3 className="font-black text-xs md:text-sm uppercase leading-tight line-clamp-2 text-white">{item.russian || item.name}</h3>
+                      {getStatusLabel(item.id) && (
+                        <p className="text-[8px] md:text-[10px] font-black uppercase text-cyan-400 mt-2">{getStatusLabel(item.id)}</p>
+                      )}
                     </div>
                   </div>
                 </div>
               ))}
             </div>
           )}
-
-          {/* ПАГИНАЦИЯ */}
-          {['home', 'manga', 'top'].includes(view) && (
-            <div className="mt-20 flex items-center justify-center gap-4">
-               <button 
-                 disabled={page === 1}
-                 onClick={() => {setPage(p => p - 1); window.scrollTo(0,0)}}
-                 className="px-8 py-4 bg-white/5 rounded-2xl font-black uppercase text-[10px] tracking-widest hover:bg-green-500 hover:text-black disabled:opacity-20 transition-all border border-white/5">
-                 Назад
-               </button>
-               <span className="w-14 h-14 bg-green-500 text-black flex items-center justify-center rounded-2xl font-black italic">{page}</span>
-               <button 
-                 onClick={() => {setPage(p => p + 1); window.scrollTo(0,0)}}
-                 className="px-8 py-4 bg-white/5 rounded-2xl font-black uppercase text-[10px] tracking-widest hover:bg-green-500 hover:text-black transition-all border border-white/5">
-                 Вперед
-               </button>
-            </div>
-          )}
         </main>
       </div>
 
-      {/* ФУТЕР */}
-      <footer className="mt-32 py-16 border-t border-white/5 bg-white/[0.02]">
-        <div className="max-w-[1800px] mx-auto px-8 flex flex-col md:flex-row justify-between items-center gap-10">
-           <div className="space-y-4 text-center md:text-left">
-              <div className="flex items-center justify-center md:justify-start gap-3">
-                 <div className="w-8 h-8 bg-green-500 rounded-lg flex items-center justify-center font-black text-black">A</div>
-                 <h2 className="font-black uppercase italic text-xl">AniHub</h2>
-              </div>
-              <p className="text-[10px] font-bold uppercase opacity-30 tracking-[0.4em]">Твой идеальный проводник в мире аниме</p>
-           </div>
-           
-           <div className="flex gap-12">
-              {['Discord', 'Telegram', 'Github', 'Twitter'].map(social => (
-                <a key={social} href="#" className="text-[10px] font-black uppercase tracking-widest hover:text-green-500 transition-colors opacity-50 hover:opacity-100">{social}</a>
-              ))}
-           </div>
-           
-           <p className="text-[10px] font-black opacity-20 uppercase tracking-widest">© 2026 Crafted by ShizoKill</p>
-        </div>
-      </footer>
-
-      {/* --- МОДАЛКА ПЛЕЕРА --- */}
+      {/* Modal Player & Manga Display */}
       {selectedItem && (
-        <div className="fixed inset-0 z-[1000] bg-black overflow-y-auto animate-in fade-in duration-500">
-          <div className="absolute top-0 left-0 w-full h-full opacity-20 pointer-events-none">
-             <img src={ASSETS + (selectedItem.image?.original || selectedItem.image)} className="w-full h-full object-cover blur-[120px]" alt="" />
-          </div>
+        <div className="fixed inset-0 z-[9999] bg-black/95 flex items-center justify-center p-0 md:p-6 overflow-hidden animate-fade-in">
+          <div className="absolute inset-0 bg-cover bg-center opacity-20 blur-[100px] pointer-events-none" style={{ backgroundImage: `url(${getImg(selectedItem)})` }} />
+          <div className="w-full h-full md:max-h-[90vh] md:max-w-[90vw] bg-[#0a0a0c] md:rounded-[40px] flex flex-col relative z-10 border border-white/10 overflow-hidden">
+            <div className="h-16 md:h-20 shrink-0 px-6 flex items-center justify-between bg-black/60 border-b border-white/10 backdrop-blur-xl">
+              <h3 className="text-white font-black uppercase text-sm md:text-lg truncate max-w-xl">{selectedItem.russian || selectedItem.name}</h3>
+              <button onClick={() => setSelectedItem(null)} className="w-10 h-10 md:w-12 md:h-12 rounded-xl bg-white/5 hover:bg-red-500 text-white flex items-center justify-center text-2xl transition-all">×</button>
+            </div>
 
-          <div className="relative z-10 max-w-7xl mx-auto p-4 md:p-12">
-            <button onClick={() => setSelectedItem(null)} className="group mb-12 flex items-center gap-4 px-8 py-4 bg-white/5 hover:bg-green-500 rounded-full transition-all border border-white/10 hover:text-black">
-               <i className="fas fa-arrow-left group-hover:-translate-x-2 transition-transform"></i>
-               <span className="font-black uppercase text-xs tracking-widest">Вернуться во Вселенную</span>
-            </button>
+            <div className="flex-1 overflow-y-auto bg-[#050507]">
+              <div className="w-full bg-black">
+                {selectedItem.kind === 'manga' ? (
+                  <div className="py-10 md:py-16 flex flex-col items-center">
+                    <img src={getImg(selectedItem)} className="w-48 md:w-64 rounded-2xl md:rounded-3xl shadow-2xl border-4 border-[#ff00ff] mb-8" alt="" />
+                    <a href={`https://shikimori.one${selectedItem.url}`} target="_blank" rel="noreferrer" className="px-8 md:px-12 py-3 md:py-5 bg-white text-black rounded-xl md:rounded-2xl font-black uppercase hover:scale-105 transition shadow-xl">Читать на Shikimori</a>
+                  </div>
+                ) : (
+                  <div className="relative aspect-video w-full">
+                    <iframe src={`https://kodik.info/find-player?shikimoriID=${selectedItem.id}&color=%23ff00ff`} className="absolute inset-0 w-full h-full border-0" allowFullScreen allow="autoplay; fullscreen" />
+                  </div>
+                )}
+              </div>
 
-            <div className="grid lg:grid-cols-[1fr_420px] gap-12">
-               <div className="space-y-8">
-                  {view === 'manga' ? (
-                    <div className="bg-white/5 rounded-[48px] p-8 md:p-16 border border-white/10 backdrop-blur-3xl text-center">
-                       <img src={ASSETS + (selectedItem.image?.original || selectedItem.image)} className="w-64 mx-auto rounded-[32px] shadow-2xl border-4 border-green-500 mb-10" alt="" />
-                       <h2 className="text-5xl font-black italic uppercase tracking-tighter mb-6 leading-tight">{selectedItem.russian || selectedItem.name}</h2>
-                       <div className="flex flex-wrap justify-center gap-3 mb-10">
-                          <span className="px-6 py-3 bg-white/5 rounded-2xl text-[10px] font-black uppercase border border-white/5">Томов: {selectedItem.volumes || '??'}</span>
-                          <span className="px-6 py-3 bg-white/5 rounded-2xl text-[10px] font-black uppercase border border-white/5">Глав: {selectedItem.chapters || '??'}</span>
-                          <span className="px-6 py-3 bg-green-500/20 text-green-500 rounded-2xl text-[10px] font-black uppercase border border-green-500/20">{selectedItem.status}</span>
-                       </div>
-                       <a href={`https://shikimori.one${selectedItem.url || ''}`} target="_blank" rel="noreferrer" 
-                          className="inline-block bg-white text-black px-12 py-5 rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-green-500 hover:scale-110 transition-all">
-                          Читать на Shikimori
-                       </a>
-                    </div>
-                  ) : (
-                    <div className="space-y-8">
-                      <div className="aspect-video bg-black rounded-[40px] overflow-hidden border-4 border-white/5 shadow-2xl relative group">
-                        <iframe className="w-full h-full" src={`https://kodik.info/find-player?shikimoriID=${selectedItem.id}&hide_ad=1&color=%2322c55e`} allowFullScreen></iframe>
+              <div className="p-6 md:p-12 max-w-6xl mx-auto flex flex-col lg:flex-row gap-12">
+                <div className="w-full lg:w-64 shrink-0 flex flex-col gap-3">
+                   {['watching', 'planned', 'completed'].map(st => (
+                     <button key={st} onClick={() => updateLibraryStatus(selectedItem, st)} className={`py-3 md:py-4 rounded-xl md:rounded-2xl font-black uppercase text-[10px] transition-all ${library[selectedItem.id]?.status === st ? 'bg-[#ff00ff] text-white shadow-lg' : 'bg-white/5 text-white/40'}`}>
+                        {st === 'watching' ? '👁️ Смотрю' : st === 'planned' ? '⏳ В планах' : '✅ Завершено'}
+                     </button>
+                   ))}
+                </div>
+
+                <div className="flex-1 space-y-10">
+                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4 md:p-6 rounded-3xl bg-white/5">
+                      <div className="text-center">
+                        <p className="text-white/20 text-[9px] font-black uppercase mb-1">Рейтинг</p>
+                        <p className="text-lg md:text-xl font-black text-yellow-400">{selectedItem.score || '0.0'} ★</p>
                       </div>
-                      <div className="bg-white/5 backdrop-blur-3xl p-8 rounded-[32px] border border-white/10 flex items-center justify-between">
-                         <div className="flex items-center gap-6">
-                            <div className="w-14 h-14 bg-green-500 rounded-2xl flex items-center justify-center text-black text-xl"><i className="fas fa-bolt"></i></div>
-                            <div>
-                               <h4 className="text-xl font-black italic uppercase leading-none mb-1">Ультра Стриминг</h4>
-                               <p className="text-[10px] opacity-40 font-black uppercase tracking-widest">Доступно несколько источников</p>
-                            </div>
-                         </div>
+                      <div className="text-center">
+                        <p className="text-white/20 text-[9px] font-black uppercase mb-1">Формат</p>
+                        <p className="text-lg md:text-xl font-black text-cyan-400 uppercase">{selectedItem.kind}</p>
                       </div>
-                    </div>
-                  )}
-               </div>
+                      <div className="text-center">
+                        <p className="text-white/20 text-[9px] font-black uppercase mb-1">Статус</p>
+                        <p className="text-lg md:text-xl font-black text-green-400 uppercase">{selectedItem.status}</p>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-white/20 text-[9px] font-black uppercase mb-1">Год</p>
+                        <p className="text-lg md:text-xl font-black text-white">{selectedItem.aired_on?.split('-')[0]}</p>
+                      </div>
+                   </div>
 
-               <div className="space-y-6">
-                  <div className="p-8 rounded-[40px] bg-white/5 border border-white/10 backdrop-blur-3xl">
-                     <p className="text-[10px] font-black uppercase text-green-500 tracking-[0.4em] mb-8">Обновить статус</p>
-                     <div className="grid gap-3">
-                        {[
-                          { id: 'watching', n: 'Смотрю', c: 'bg-blue-600', i: 'fa-play' },
-                          { id: 'planned', n: 'В планах', c: 'bg-orange-500', i: 'fa-calendar' },
-                          { id: 'completed', n: 'Завершено', c: 'bg-green-500', i: 'fa-check' },
-                          { id: 'dropped', n: 'Брошено', c: 'bg-red-600', i: 'fa-times' }
-                        ].map(st => (
-                          <button 
-                            key={st.id}
-                            onClick={() => updateStatus(selectedItem, st.id)}
-                            className={`flex items-center justify-between px-6 py-5 rounded-2xl font-black uppercase text-[10px] tracking-widest transition-all border-2 ${library[selectedItem.id]?.status === st.id ? `${st.c} text-white border-transparent scale-[1.05]` : 'bg-white/5 border-white/5 hover:border-white/20'}`}>
-                            <span className="flex items-center gap-3"><i className={`fas ${st.i}`}></i> {st.n}</span>
-                            {library[selectedItem.id]?.status === st.id && <i className="fas fa-check-circle"></i>}
+                   <div className="space-y-4">
+                      <h4 className="text-white/20 font-black uppercase text-[10px]">Ваша оценка:</h4>
+                      <div className="flex flex-wrap gap-2">
+                        {[1,2,3,4,5,6,7,8,9,10].map(score => (
+                          <button key={score} onClick={() => handleRating(selectedItem, score)} className={`w-10 h-10 md:w-12 md:h-12 rounded-lg md:rounded-xl font-black text-xs md:text-sm transition-all ${ratings[selectedItem.id] === score ? 'bg-gradient-to-tr from-[#ff00ff] to-[#00ffff] text-white scale-110' : 'bg-white/5 text-white/40'}`}>
+                            {score}
                           </button>
                         ))}
-                     </div>
-                  </div>
-
-                  <div className="p-8 rounded-[40px] bg-green-500 text-black">
-                     <i className="fas fa-info-circle text-3xl mb-4"></i>
-                     <p className="font-black italic text-lg leading-tight uppercase">
-                       "Любой шедевр начинается с первой серии. Приятного просмотра!"
-                     </p>
-                  </div>
-               </div>
+                      </div>
+                   </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* --- МОДАЛКА ПРОФИЛЯ --- */}
+      {/* Profile Modal */}
       {isProfileModalOpen && (
-        <div className="fixed inset-0 z-[2000] flex items-center justify-center p-4">
-            <div className="absolute inset-0 bg-black/95 backdrop-blur-3xl" onClick={() => setIsProfileModalOpen(false)}></div>
-            <div className="relative w-full max-w-lg bg-[#0a0a0a] border border-white/10 rounded-[48px] p-10 text-center shadow-2xl">
-              <div className="relative inline-block mb-10">
-                 <img src={user.avatar} className="w-32 h-32 rounded-[32px] object-cover border-4 border-green-500 shadow-[0_0_40px_rgba(34,197,94,0.3)]" alt="" />
-                 <div className="absolute -bottom-2 -right-2 w-10 h-10 bg-green-500 rounded-xl flex items-center justify-center text-black border-4 border-[#0a0a0a]"><i className="fas fa-pen"></i></div>
-              </div>
-
-              <div className="space-y-6 mb-10 text-left">
-                 <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase text-green-500 ml-4 tracking-[0.3em]">Никнейм</label>
-                    <input type="text" value={user.name} onChange={(e) => setUser({...user, name: e.target.value})} className="w-full bg-white/5 border border-white/10 focus:border-green-500 rounded-2xl px-6 py-4 outline-none font-black italic uppercase tracking-widest text-sm" />
-                 </div>
-                 <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase text-green-500 ml-4 tracking-[0.3em]">Ссылка на аватар</label>
-                    <input type="text" placeholder="https://..." onChange={(e) => e.target.value && setUser({...user, avatar: e.target.value})} className="w-full bg-white/5 border border-white/10 focus:border-green-500 rounded-2xl px-6 py-4 outline-none text-xs font-mono" />
-                 </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4 mb-10">
-                 <div className="bg-white/5 p-6 rounded-3xl border border-white/5">
-                    <p className="text-3xl font-black italic text-green-500">{Object.keys(library).length}</p>
-                    <p className="text-[10px] font-black uppercase opacity-40">Тайтлов</p>
-                 </div>
-                 <div className="bg-white/5 p-6 rounded-3xl border border-white/5">
-                    <p className="text-3xl font-black italic text-green-500">{history.length}</p>
-                    <p className="text-[10px] font-black uppercase opacity-40">В истории</p>
-                 </div>
-              </div>
-
-              <button onClick={() => setIsProfileModalOpen(false)} className="w-full bg-green-500 text-black py-5 rounded-2xl font-black uppercase tracking-[0.4em] text-xs hover:scale-105 transition-all shadow-xl shadow-green-500/20">
-                Сохранить изменения
-              </button>
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/90 backdrop-blur-3xl animate-fade-in">
+          <div className="relative w-full max-w-lg glass rounded-[40px] p-8 md:p-12 text-center border border-white/10">
+            <button onClick={() => setIsProfileModalOpen(false)} className="absolute top-6 right-6 text-3xl text-white opacity-50">×</button>
+            <div className="relative w-32 h-32 md:w-44 md:h-44 mx-auto mb-8 md:10 group">
+              <img src={user.avatar} className="w-full h-full rounded-3xl md:rounded-[40px] object-cover border-4 border-[#ff00ff]" alt="" />
+              <input type="file" ref={fileInputRef} onChange={handleAvatarChange} className="hidden" />
+              <button onClick={() => fileInputRef.current.click()} className="absolute -bottom-2 -right-2 bg-[#ff00ff] w-10 h-10 md:w-14 md:h-14 rounded-xl md:rounded-2xl flex items-center justify-center text-white">📸</button>
             </div>
+            <input type="text" value={user.name} onChange={(e) => setUser({ ...user, name: e.target.value })} className="w-full bg-white/5 rounded-2xl px-6 py-4 font-black uppercase text-center text-white outline-none focus:border-[#ff00ff] border border-transparent" />
+            <div className="mt-8 bg-white/5 p-6 md:p-8 rounded-[35px]">
+              <div className="flex justify-between text-[10px] font-black uppercase mb-4">
+                <span className="text-cyan-400">Ур. {Math.floor(user.xp / 100) + 1}</span>
+                <span className="text-[#ff00ff]">{user.xp % 100}% XP</span>
+              </div>
+              <div className="h-3 bg-black/50 rounded-full overflow-hidden">
+                <div className="h-full bg-gradient-to-r from-[#ff00ff] to-[#00ffff]" style={{ width: `${user.xp % 100}%` }} />
+              </div>
+            </div>
+          </div>
         </div>
       )}
+
+      <footer className="mt-20 py-16 border-t border-white/5 text-center">
+        <h2 className="text-2xl md:text-4xl font-black uppercase text-white mb-4">ANI<span className="text-[#ff00ff]">HUB</span></h2>
+        <p className="text-[10px] font-black uppercase tracking-[0.5em] opacity-20 text-white">© 2026 Developed by @Sh1zoK1ll</p>
+      </footer>
     </div>
   );
 };
