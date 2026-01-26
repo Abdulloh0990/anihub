@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 
 const API = 'https://shikimori.one/api';
 const ASSETS = 'https://shikimori.one';
@@ -10,6 +10,19 @@ const GENRES = [
   { id: 24, name: 'Фантастика', icon: '🚀' }, { id: 22, name: 'Романтика', icon: '❤️' },
   { id: 6, name: 'Демоны', icon: '👿' }, { id: 11, name: 'Игры', icon: '🎮' }
 ];
+
+const RANKS = [
+  { min: 1, label: 'Новичок', color: 'text-gray-400' },
+  { min: 10, label: 'Любитель', color: 'text-blue-400' },
+  { min: 30, label: 'Ценитель', color: 'text-purple-400' },
+  { min: 60, label: 'Мастер', color: 'text-orange-400' },
+  { min: 85, label: 'Элита', color: 'text-red-500' },
+  { min: 100, label: 'Легендарный Отаку', color: 'text-[#ff00ff] drop-shadow-[0_0_10px_#ff00ff]' }
+];
+
+const getRank = (lvl) => {
+  return [...RANKS].reverse().find(r => lvl >= r.min) || RANKS[0];
+};
 
 const App = () => {
   const [view, setView] = useState('home');
@@ -34,6 +47,14 @@ const App = () => {
     bio: 'Жизнь в стиле Киберпанк',
     xp: 0
   });
+
+  // Level va XP hisoblash logikasi (Xatoni to'g'irlash uchun qo'shildi)
+  const userStats = useMemo(() => {
+    const level = Math.floor(user.xp / 100) + 1;
+    const nextLevelAt = level * 100;
+    const currentLevelXP = user.xp % 100;
+    return { level, xp: currentLevelXP, totalXp: user.xp, nextLevelAt: 100 };
+  }, [user.xp]);
 
   useEffect(() => {
     localStorage.setItem('aniHub_lib_v4', JSON.stringify(library));
@@ -90,6 +111,7 @@ const App = () => {
   const handleRating = (item, score) => {
     setRatings(prev => ({ ...prev, [item.id]: score }));
     if (!library[item.id]) updateLibraryStatus(item, 'planned');
+    setUser(prev => ({ ...prev, xp: prev.xp + 2 })); // Baholash uchun XP
   };
 
   const addToHistory = (item) => {
@@ -100,6 +122,7 @@ const App = () => {
 
   const updateLibraryStatus = (item, status) => {
     setLibrary(prev => ({ ...prev, [item.id]: { ...item, status } }));
+    setUser(prev => ({ ...prev, xp: prev.xp + 10 })); // Ro'yxatga qo'shish uchun XP
   };
 
   const handleAvatarChange = (e) => {
@@ -154,7 +177,6 @@ const App = () => {
               </h1>
             </div>
 
-            {/* Desktop Nav */}
             <nav className="hidden xl:flex gap-6">
               {['home', 'manga', 'top', 'trending_list', 'collection', 'history'].map(m => (
                 <button
@@ -174,11 +196,23 @@ const App = () => {
               placeholder="Поиск..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className={`w-full py-2.5 md:py-4 px-4 md:px-6 rounded-xl md:rounded-2xl glass border-2 transition-all font-bold text-xs md:text-sm ${isDarkMode ? 'bg-white/5 border-transparent focus:border-[#ff00ff]' : 'bg-white border-slate-200'}`}
+              className={`w-full py-2.5 md:py-4 px-4 md:px-6 rounded-xl md:rounded-2xl glass border-2 transition-all font-bold text-xs md:text-sm ${isDarkMode ? 'bg-white/5 border-transparent focus:border-[#ff00ff]' : 'bg-white border-slate-200 text-slate-900'}`}
             />
           </div>
 
           <div className="flex items-center gap-3 md:gap-6 shrink-0">
+             <button 
+              onClick={() => {
+                if (content.length > 0) {
+                  const random = content[Math.floor(Math.random() * content.length)];
+                  setSelectedItem(random);
+                  addToHistory(random);
+                }
+              }}
+              className="hidden sm:flex items-center gap-2 px-3 py-2 bg-white/5 border border-white/10 rounded-xl hover:bg-[#ff00ff]/20 transition-all"
+            >
+              <span className="text-lg">🎲</span>
+            </button>
             <button onClick={() => setIsDarkMode(!isDarkMode)} className="w-10 h-10 md:w-12 md:h-12 rounded-xl md:rounded-2xl glass flex items-center justify-center text-lg hover:bg-[#ff00ff]/20">
               {isDarkMode ? '☀️' : '🌙'}
             </button>
@@ -188,7 +222,6 @@ const App = () => {
           </div>
         </div>
 
-        {/* MOBILE NAV - Trending, Collection, History included here */}
         <div className="xl:hidden flex overflow-x-auto no-scrollbar gap-4 px-4 py-3 border-t border-white/5">
            {['home', 'manga', 'top', 'trending_list', 'collection', 'history'].map(m => (
               <button
@@ -202,7 +235,7 @@ const App = () => {
         </div>
       </header>
 
-      {/* Trending SECTION WITH INFINITE ANIMATION */}
+      {/* Hero Trending */}
       {view === 'home' && !searchQuery && page === 1 && (
         <section className="mt-10 overflow-hidden py-4 md:py-10">
           <div className="px-6 md:px-10 mb-6">
@@ -210,14 +243,13 @@ const App = () => {
           </div>
           <div className="relative">
             <div className="animate-infinite-scroll flex gap-10">
-              {/* Ikki marta aylantiramizki, uzilish bo'lmasin */}
               {[...trending, ...trending].map((item, i) => (
                 <div key={`${item.id}-${i}`} onClick={() => { setSelectedItem(item); addToHistory(item); }} className="w-64 md:w-80 group cursor-pointer relative shrink-0">
                   <div className="relative aspect-video rounded-2xl md:rounded-[32px] overflow-hidden glass border-2 border-transparent group-hover:border-[#ff00ff] transition-all duration-500">
-                    <img src={getImg(item)} className="w-full h-full object-cover" alt="" />
+                    <img src={getImg(item)} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" alt="" />
                     <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent" />
                     <div className="absolute bottom-4 left-4">
-                      <h4 className="text-sm md:text-lg font-black text-white truncate w-56">{item.russian || item.name}</h4>
+                      <h4 className="text-sm md:text-lg font-black text-white truncate w-56 italic">{item.russian || item.name}</h4>
                     </div>
                   </div>
                 </div>
@@ -226,6 +258,7 @@ const App = () => {
           </div>
         </section>
       )}
+
       {/* Main Grid */}
       <div className="max-w-[1920px] mx-auto px-4 md:px-10 py-8 md:py-12 flex flex-col lg:flex-row gap-10">
         <aside className="w-full lg:w-80 shrink-0 space-y-6">
@@ -240,14 +273,8 @@ const App = () => {
               ))}
             </div>
             
-            {/* TELEGRAM LINK UNDER GENRES */}
             <div className="mt-6 md:mt-8 pt-6 md:pt-8 border-t border-white/10">
-              <a 
-                href="https://t.me/Sh1zoK1ll" 
-                target="_blank" 
-                rel="noreferrer" 
-                className="flex items-center justify-center gap-3 w-full py-4 rounded-xl md:rounded-2xl bg-[#0088cc] hover:brightness-110 transition-all shadow-lg"
-              >
+              <a href="https://t.me/Sh1zoK1ll" target="_blank" rel="noreferrer" className="flex items-center justify-center gap-3 w-full py-4 rounded-xl md:rounded-2xl bg-[#0088cc] hover:brightness-110 transition-all shadow-lg">
                 <span className="text-xl">✈️</span>
                 <div className="text-left">
                   <p className="text-[9px] font-black uppercase text-white/70 leading-none">Developer</p>
@@ -279,22 +306,32 @@ const App = () => {
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4 md:gap-8">
               {finalContent.map((item, idx) => (
-                <div key={`${item.id}-${idx}`} onClick={() => { setSelectedItem(item); addToHistory(item); }} className="group relative cursor-pointer animate-fade-in" style={{ animationDelay: `${idx * 20}ms` }}>
-                  <div className="relative aspect-[3/4.5] rounded-2xl md:rounded-[40px] overflow-hidden glass border-2 border-transparent group-hover:border-[#ff00ff] transition-all duration-500 shadow-2xl">
+                <div key={`${item.id}-${idx}`} onClick={() => { setSelectedItem(item); addToHistory(item); }} className="group relative cursor-pointer animate-fade-in">
+                  <div className="relative aspect-[3/4.5] rounded-2xl md:rounded-[40px] overflow-hidden glass border-2 border-transparent group-hover:border-[#ff00ff] transition-all duration-500 shadow-2xl bg-black">
                     
                     {ratings[item.id] && (
-                      <div className={`absolute top-2 md:top-4 left-2 md:left-4 z-20 px-2 md:px-4 py-1 md:py-2 rounded-lg md:rounded-2xl font-black text-[9px] md:text-xs uppercase text-white bg-gradient-to-r ${ratings[item.id] > 5 ? 'from-[#ff00ff] to-[#00ffff]' : 'from-cyan-500 to-blue-600'}`}>
+                      <div className="absolute top-2 md:top-4 left-2 md:left-4 z-30 px-2 md:px-3 py-1 rounded-lg font-black text-[8px] md:text-[10px] uppercase text-white bg-gradient-to-r from-[#ff00ff] to-[#00ffff]">
                         ⭐ {ratings[item.id]}
                       </div>
                     )}
 
-                    <img src={getImg(item)} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" alt="" />
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-transparent to-transparent opacity-80" />
-                    <div className="absolute bottom-4 md:bottom-6 left-4 md:left-6 right-4 md:right-6">
-                      <p className="text-[8px] md:text-[10px] font-black text-[#ff00ff] uppercase mb-1">{item.kind}</p>
-                      <h3 className="font-black text-xs md:text-sm uppercase leading-tight line-clamp-2 text-white">{item.russian || item.name}</h3>
+                    <img src={getImg(item)} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110 group-hover:opacity-40" alt="" />
+
+                    <div className="absolute inset-0 z-20 flex flex-col items-center justify-center p-4 opacity-0 group-hover:opacity-100 transition-all duration-500 bg-black/40 backdrop-blur-md">
+                       <div className="translate-y-6 group-hover:translate-y-0 transition-transform duration-500 text-center">
+                          <div className="w-10 h-10 md:w-12 md:h-12 bg-[#ff00ff] rounded-full flex items-center justify-center mb-3 mx-auto shadow-[0_0_20px_#ff00ff]">
+                            <span className="text-white text-lg">▶</span>
+                          </div>
+                          <p className="text-[#00ffff] text-[9px] md:text-[10px] font-black uppercase tracking-tighter mb-1">{item.kind} • {item.episodes || '?'} эп.</p>
+                          <p className="text-white text-[10px] md:text-xs font-black uppercase italic">Смотреть</p>
+                       </div>
+                    </div>
+
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/90 to-transparent z-10 group-hover:opacity-0 transition-opacity" />
+                    <div className="absolute bottom-4 md:bottom-6 left-4 md:left-6 right-4 md:right-6 z-10 group-hover:opacity-0 transition-opacity">
+                      <h3 className="font-black text-[10px] md:text-sm uppercase leading-tight line-clamp-2 text-white italic">{item.russian || item.name}</h3>
                       {getStatusLabel(item.id) && (
-                        <p className="text-[8px] md:text-[10px] font-black uppercase text-cyan-400 mt-2">{getStatusLabel(item.id)}</p>
+                        <p className="text-[8px] font-black uppercase text-cyan-400 mt-2">{getStatusLabel(item.id)}</p>
                       )}
                     </div>
                   </div>
@@ -305,71 +342,74 @@ const App = () => {
         </main>
       </div>
 
-      {/* Modal Player & Manga Display */}
+      {/* Modal Player */}
       {selectedItem && (
-        <div className="fixed inset-0 z-[9999] bg-black/95 flex items-center justify-center p-0 md:p-6 overflow-hidden animate-fade-in">
-          <div className="absolute inset-0 bg-cover bg-center opacity-20 blur-[100px] pointer-events-none" style={{ backgroundImage: `url(${getImg(selectedItem)})` }} />
-          <div className="w-full h-full md:max-h-[90vh] md:max-w-[90vw] bg-[#0a0a0c] md:rounded-[40px] flex flex-col relative z-10 border border-white/10 overflow-hidden">
-            <div className="h-16 md:h-20 shrink-0 px-6 flex items-center justify-between bg-black/60 border-b border-white/10 backdrop-blur-xl">
-              <h3 className="text-white font-black uppercase text-sm md:text-lg truncate max-w-xl">{selectedItem.russian || selectedItem.name}</h3>
-              <button onClick={() => setSelectedItem(null)} className="w-10 h-10 md:w-12 md:h-12 rounded-xl bg-white/5 hover:bg-red-500 text-white flex items-center justify-center text-2xl transition-all">×</button>
+        <div className="fixed inset-0 z-[9999] bg-[#050507] flex flex-col animate-fade-in overflow-hidden">
+          <div className="relative z-[100] h-16 md:h-20 px-4 md:px-10 flex items-center justify-between bg-black/60 border-b border-white/5 backdrop-blur-xl">
+            <div className="flex items-center gap-4">
+              <button onClick={() => setSelectedItem(null)} className="w-10 h-10 rounded-xl bg-white/5 hover:bg-[#ff00ff]/20 text-white flex items-center justify-center transition-all">←</button>
+              <h3 className="text-white font-black uppercase text-xs md:text-base truncate italic max-w-[200px] md:max-w-3xl">
+                {selectedItem.russian || selectedItem.name}
+              </h3>
+            </div>
+            <button onClick={() => setSelectedItem(null)} className="w-10 h-10 rounded-xl bg-white/5 hover:bg-red-500 text-white flex items-center justify-center text-xl transition-all">×</button>
+          </div>
+
+          <div className="relative z-10 flex-1 flex flex-col lg:flex-row overflow-hidden">
+            <div className="w-full lg:w-[400px] overflow-y-auto bg-black/40 border-r border-white/5 p-6 md:p-10 no-scrollbar order-2 lg:order-1">
+              <div className="grid grid-cols-2 gap-3 mb-8">
+                {[
+                  { label: 'Рейтинг', value: `${selectedItem.score || '0.0'} ★`, color: 'text-yellow-400' },
+                  { label: 'Формат', value: selectedItem.kind, color: 'text-cyan-400' },
+                  { label: 'Год', value: selectedItem.aired_on?.split('-')[0], color: 'text-white' },
+                  { label: 'Статус', value: selectedItem.status, color: 'text-green-400' }
+                ].map((info, i) => (
+                  <div key={i} className="bg-white/5 p-4 rounded-2xl border border-white/5">
+                    <p className="text-white/20 text-[9px] font-black uppercase mb-1">{info.label}</p>
+                    <p className={`text-sm font-black uppercase ${info.color}`}>{info.value}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="space-y-3 mb-8">
+                <p className="text-[10px] font-black text-white/30 uppercase tracking-[0.2em] ml-2">Статус</p>
+                <div className="flex flex-col gap-2">
+                  {['watching', 'planned', 'completed'].map(st => (
+                    <button key={st} onClick={() => updateLibraryStatus(selectedItem, st)} className={`w-full py-4 rounded-2xl font-black uppercase text-[10px] transition-all ${library[selectedItem.id]?.status === st ? 'bg-gradient-to-r from-[#ff00ff] to-[#00ffff] text-white' : 'bg-white/5 text-white/40'}`}>
+                      {st === 'watching' ? '👁️ Смотрю' : st === 'planned' ? '⏳ В планах' : '✅ Завершено'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <h4 className="text-white/20 font-black uppercase text-[10px] tracking-[0.2em] ml-2">Ваша оценка</h4>
+                <div className="grid grid-cols-5 gap-2">
+                  {[1,2,3,4,5,6,7,8,9,10].map(score => (
+                    <button key={score} onClick={() => handleRating(selectedItem, score)} className={`aspect-square rounded-xl font-black text-sm transition-all ${ratings[selectedItem.id] === score ? 'bg-[#ff00ff] text-white scale-110 shadow-[0_0_15px_#ff00ff]' : 'bg-white/5 text-white/30'}`}>
+                      {score}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto bg-[#050507]">
-              <div className="w-full bg-black">
-                {selectedItem.kind === 'manga' ? (
-                  <div className="py-10 md:py-16 flex flex-col items-center">
-                    <img src={getImg(selectedItem)} className="w-48 md:w-64 rounded-2xl md:rounded-3xl shadow-2xl border-4 border-[#ff00ff] mb-8" alt="" />
-                    <a href={`https://shikimori.one${selectedItem.url}`} target="_blank" rel="noreferrer" className="px-8 md:px-12 py-3 md:py-5 bg-white text-black rounded-xl md:rounded-2xl font-black uppercase hover:scale-105 transition shadow-xl">Читать на Shikimori</a>
-                  </div>
-                ) : (
-                  <div className="relative aspect-video w-full">
-                    <iframe src={`https://kodik.info/find-player?shikimoriID=${selectedItem.id}&color=%23ff00ff`} className="absolute inset-0 w-full h-full border-0" allowFullScreen allow="autoplay; fullscreen" />
-                  </div>
-                )}
-              </div>
-
-              <div className="p-6 md:p-12 max-w-6xl mx-auto flex flex-col lg:flex-row gap-12">
-                <div className="w-full lg:w-64 shrink-0 flex flex-col gap-3">
-                   {['watching', 'planned', 'completed'].map(st => (
-                     <button key={st} onClick={() => updateLibraryStatus(selectedItem, st)} className={`py-3 md:py-4 rounded-xl md:rounded-2xl font-black uppercase text-[10px] transition-all ${library[selectedItem.id]?.status === st ? 'bg-[#ff00ff] text-white shadow-lg' : 'bg-white/5 text-white/40'}`}>
-                        {st === 'watching' ? '👁️ Смотрю' : st === 'planned' ? '⏳ В планах' : '✅ Завершено'}
-                     </button>
-                   ))}
+            <div className="flex-1 bg-black flex items-center justify-center order-1 lg:order-2">
+              {selectedItem.kind === 'manga' ? (
+                <div className="w-full h-full overflow-y-auto flex flex-col items-center py-10 no-scrollbar">
+                  <img src={getImg(selectedItem)} className="w-56 md:w-72 rounded-[32px] border-4 border-[#ff00ff] mb-6 shadow-2xl" alt="" />
+                  <a href={`https://shikimori.one${selectedItem.url}`} target="_blank" rel="noreferrer" className="px-10 py-4 bg-[#ff00ff] text-white rounded-2xl font-black uppercase hover:scale-105 transition-transform shadow-[0_0_20px_#ff00ff]">Читать на Shikimori</a>
                 </div>
-
-                <div className="flex-1 space-y-10">
-                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4 md:p-6 rounded-3xl bg-white/5">
-                      <div className="text-center">
-                        <p className="text-white/20 text-[9px] font-black uppercase mb-1">Рейтинг</p>
-                        <p className="text-lg md:text-xl font-black text-yellow-400">{selectedItem.score || '0.0'} ★</p>
-                      </div>
-                      <div className="text-center">
-                        <p className="text-white/20 text-[9px] font-black uppercase mb-1">Формат</p>
-                        <p className="text-lg md:text-xl font-black text-cyan-400 uppercase">{selectedItem.kind}</p>
-                      </div>
-                      <div className="text-center">
-                        <p className="text-white/20 text-[9px] font-black uppercase mb-1">Статус</p>
-                        <p className="text-lg md:text-xl font-black text-green-400 uppercase">{selectedItem.status}</p>
-                      </div>
-                      <div className="text-center">
-                        <p className="text-white/20 text-[9px] font-black uppercase mb-1">Год</p>
-                        <p className="text-lg md:text-xl font-black text-white">{selectedItem.aired_on?.split('-')[0]}</p>
-                      </div>
-                   </div>
-
-                   <div className="space-y-4">
-                      <h4 className="text-white/20 font-black uppercase text-[10px]">Ваша оценка:</h4>
-                      <div className="flex flex-wrap gap-2">
-                        {[1,2,3,4,5,6,7,8,9,10].map(score => (
-                          <button key={score} onClick={() => handleRating(selectedItem, score)} className={`w-10 h-10 md:w-12 md:h-12 rounded-lg md:rounded-xl font-black text-xs md:text-sm transition-all ${ratings[selectedItem.id] === score ? 'bg-gradient-to-tr from-[#ff00ff] to-[#00ffff] text-white scale-110' : 'bg-white/5 text-white/40'}`}>
-                            {score}
-                          </button>
-                        ))}
-                      </div>
-                   </div>
+              ) : (
+                <div className="w-full h-full">
+                   <iframe 
+                    src={`https://kodik.info/find-player?shikimoriID=${selectedItem.id}&color=%23ff00ff`} 
+                    className="w-full h-full border-0 aspect-video lg:aspect-auto" 
+                    allowFullScreen 
+                    allow="autoplay; fullscreen" 
+                  />
                 </div>
-              </div>
+              )}
             </div>
           </div>
         </div>
@@ -377,24 +417,93 @@ const App = () => {
 
       {/* Profile Modal */}
       {isProfileModalOpen && (
-        <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/90 backdrop-blur-3xl animate-fade-in">
-          <div className="relative w-full max-w-lg glass rounded-[40px] p-8 md:p-12 text-center border border-white/10">
-            <button onClick={() => setIsProfileModalOpen(false)} className="absolute top-6 right-6 text-3xl text-white opacity-50">×</button>
-            <div className="relative w-32 h-32 md:w-44 md:h-44 mx-auto mb-8 md:10 group">
-              <img src={user.avatar} className="w-full h-full rounded-3xl md:rounded-[40px] object-cover border-4 border-[#ff00ff]" alt="" />
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/90 backdrop-blur-3xl animate-fade-in text-white">
+          <div className="relative w-full max-w-lg glass rounded-[40px] p-8 md:p-12 text-center border border-white/10 overflow-hidden bg-[#0a0a0c]">
+            <button onClick={() => setIsProfileModalOpen(false)} className="absolute top-6 right-6 text-3xl opacity-50 hover:opacity-100 transition-opacity">×</button>
+            
+            <div className="relative w-32 h-32 md:w-44 md:h-44 mx-auto mb-6 group">
+              <div className="absolute inset-0 rounded-[40px] bg-[#ff00ff] blur-md opacity-20 group-hover:opacity-40 animate-pulse"></div>
+              <img src={user.avatar} className="relative w-full h-full rounded-3xl md:rounded-[40px] object-cover border-4 border-[#ff00ff] z-10" alt="avatar" />
               <input type="file" ref={fileInputRef} onChange={handleAvatarChange} className="hidden" />
-              <button onClick={() => fileInputRef.current.click()} className="absolute -bottom-2 -right-2 bg-[#ff00ff] w-10 h-10 md:w-14 md:h-14 rounded-xl md:rounded-2xl flex items-center justify-center text-white">📸</button>
+              <button onClick={() => fileInputRef.current.click()} className="absolute -bottom-2 -right-2 bg-[#ff00ff] w-10 h-10 md:w-14 md:h-14 rounded-xl md:rounded-2xl flex items-center justify-center z-20 shadow-xl hover:scale-110 transition-transform">📸</button>
             </div>
-            <input type="text" value={user.name} onChange={(e) => setUser({ ...user, name: e.target.value })} className="w-full bg-white/5 rounded-2xl px-6 py-4 font-black uppercase text-center text-white outline-none focus:border-[#ff00ff] border border-transparent" />
-            <div className="mt-8 bg-white/5 p-6 md:p-8 rounded-[35px]">
-              <div className="flex justify-between text-[10px] font-black uppercase mb-4">
-                <span className="text-cyan-400">Ур. {Math.floor(user.xp / 100) + 1}</span>
-                <span className="text-[#ff00ff]">{user.xp % 100}% XP</span>
+
+            <div className="space-y-1 mb-8">
+              <input 
+                type="text" 
+                value={user.name} 
+                onChange={(e) => setUser({ ...user, name: e.target.value })} 
+                className="w-full bg-transparent font-black uppercase text-center text-2xl outline-none border-b border-transparent focus:border-white/10" 
+              />
+              <p className={`text-[10px] md:text-xs font-black uppercase tracking-[0.3em] ${getRank(userStats.level).color}`}>
+                {getRank(userStats.level).label}
+              </p>
+            </div>
+
+            <div className="bg-white/5 p-6 md:p-8 rounded-[35px] border border-white/5 relative">
+              <div className="flex justify-between items-end mb-4">
+                <div className="text-left">
+                  <p className="text-[8px] font-black text-white/30 uppercase tracking-widest">Уровень</p>
+                  <p className="text-3xl font-black italic">{userStats.level}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[8px] font-black text-white/30 uppercase tracking-widest">Опыт</p>
+                  <p className="text-sm font-black text-cyan-400">
+                    {userStats.xp} / 100
+                  </p>
+                </div>
               </div>
-              <div className="h-3 bg-black/50 rounded-full overflow-hidden">
-                <div className="h-full bg-gradient-to-r from-[#ff00ff] to-[#00ffff]" style={{ width: `${user.xp % 100}%` }} />
+
+              <div className="h-4 bg-black/50 rounded-full overflow-hidden p-[2px] border border-white/5">
+                <div 
+                  className="h-full bg-gradient-to-r from-[#ff00ff] via-[#00ffff] to-[#ff00ff] rounded-full transition-all duration-1000" 
+                  style={{ width: `${(userStats.xp / 100) * 100}%` }} 
+                />
+              </div>
+
+              <div className="mt-8 grid grid-cols-2 gap-3">
+                <div className="bg-white/5 p-4 rounded-3xl border border-white/5">
+                  <p className="text-[8px] font-black text-white/30 uppercase mb-1 text-left">Завершено</p>
+                  <p className="text-xl font-black text-white italic text-left">{Object.values(library).filter(a => a.status === 'completed').length}</p>
+                </div>
+                <div className="bg-white/5 p-4 rounded-3xl border border-white/5">
+                  <p className="text-[8px] font-black text-white/30 uppercase mb-1 text-left">История</p>
+                  <p className="text-xl font-black text-white italic text-left">{history.length}</p>
+                </div>
+                {/* STATISTIKA */}
+<div className="mt-8 grid grid-cols-2 gap-3">
+  <div className="bg-white/5 p-4 rounded-3xl border border-white/5">
+    <p className="text-[8px] font-black text-white/30 uppercase mb-1 text-left">Завершено</p>
+    <p className="text-xl font-black text-white italic text-left">{Object.values(library).filter(a => a.status === 'completed').length}</p>
+  </div>
+  <div className="bg-white/5 p-4 rounded-3xl border border-white/5">
+    <p className="text-[8px] font-black text-white/30 uppercase mb-1 text-left">Часов</p>
+    <p className="text-xl font-black text-white italic text-left">
+      {Math.round(Object.values(library).filter(a => a.status === 'completed').length * 4.5)}
+    </p>
+  </div>
+</div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast */}
+      {showToast && history.length > 0 && (
+        <div className="fixed bottom-6 right-6 z-[10001] animate-fade-in w-[calc(100%-3rem)] md:w-96">
+          <div 
+            onClick={() => setSelectedItem(history[0])}
+            className="glass p-4 rounded-2xl border-2 border-[#ff00ff] flex items-center gap-4 cursor-pointer hover:scale-105 transition-transform shadow-[0_0_30px_rgba(255,0,255,0.3)]"
+          >
+            <div className="w-12 h-16 shrink-0 rounded-lg overflow-hidden">
+              <img src={getImg(history[0])} className="w-full h-full object-cover" alt="" />
+            </div>
+            <div className="flex-1 overflow-hidden">
+              <p className="text-[10px] font-black uppercase text-[#ff00ff] mb-1">Продолжить? ✨</p>
+              <h4 className="text-xs font-black text-white truncate uppercase italic">{history[0].russian || history[0].name}</h4>
+            </div>
+            <button onClick={(e) => { e.stopPropagation(); setShowToast(false); }} className="text-white/40 hover:text-white text-xl p-2">×</button>
           </div>
         </div>
       )}
