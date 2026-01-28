@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-
+import logo from './img/logo.png';
 const API = 'https://shikimori.one/api';
 const ASSETS = 'https://shikimori.one';
 
@@ -42,6 +42,9 @@ const App = () => {
   const [history, setHistory] = useState(() => JSON.parse(localStorage.getItem('aniHub_hist_v4')) ?? []);
   const [ratings, setRatings] = useState(() => JSON.parse(localStorage.getItem('aniHub_ratings_v4')) ?? {});
   const [user, setUser] = useState(() => JSON.parse(localStorage.getItem('aniHub_user_v4')) ?? {
+    
+
+    
     name: 'Кибер_Пользователь',
     avatar: 'https://api.dicebear.com/7.x/pixel-art/svg?seed=Shizo',
     bio: 'Жизнь в стиле Киберпанк',
@@ -56,6 +59,29 @@ const App = () => {
     return { level, xp: currentLevelXP, totalXp: user.xp, nextLevelAt: 100 };
   }, [user.xp]);
 
+  // Opisaniyeni yuklash uchun useEffect
+useEffect(() => {
+  const fetchDescription = async () => {
+    // Agar anime tanlangan bo'lsa va hali opisaniyesi yuklanmagan bo'lsa
+    if (selectedItem && selectedItem.id && !selectedItem.description) {
+      try {
+        const response = await fetch(`https://shikimori.one/api/animes/${selectedItem.id}`);
+        const data = await response.json();
+        
+        // Mavjud selectedItem ga descriptionni qo'shib yangilaymiz
+        setSelectedItem(prev => ({
+          ...prev,
+          description: data.description_html || data.description || "Описание отсутствует."
+        }));
+      } catch (error) {
+        console.error("Opisaniye yuklashda xato:", error);
+      }
+    }
+  };
+
+  fetchDescription();
+}, [selectedItem?.id]); // Faqat anime o'zgarganda ishlaydi
+const [isDescOpen, setIsDescOpen] = useState(false);
   useEffect(() => {
     localStorage.setItem('aniHub_lib_v4', JSON.stringify(library));
     localStorage.setItem('aniHub_hist_v4', JSON.stringify(history));
@@ -164,13 +190,18 @@ const App = () => {
         ::-webkit-scrollbar-thumb { background: linear-gradient(#ff00ff, #00ffff); border-radius: 10px; }
       `}</style>
 
-      {/* Header */}
+ {/* Header */}
       <header className={`sticky top-0 z-[1000] glass border-b ${isDarkMode ? 'border-white/10' : 'border-slate-200'} backdrop-blur-2xl`}>
         <div className="max-w-[1920px] mx-auto px-4 md:px-6 py-4 flex items-center justify-between gap-4">
           <div className="flex items-center gap-4 md:gap-10 shrink-0">
+            {/* Yangi Logotip Bloki */}
             <div onClick={() => { setView('home'); setPage(1); }} className="flex items-center gap-3 cursor-pointer group">
-              <div className="w-10 h-10 md:w-14 md:h-14 bg-gradient-to-br from-[#ff00ff] to-[#00ffff] rounded-xl md:rounded-2xl flex items-center justify-center shadow-[0_0_20px_rgba(255,0,255,0.5)]">
-                <span className="text-xl md:text-3xl font-black text-white">A</span>
+              <div className="w-10 h-10 md:w-14 md:h-14 overflow-hidden rounded-xl md:rounded-2xl shadow-[0_0_20px_rgba(255,0,255,0.3)]">
+                <img 
+                  src={logo} 
+                  alt="AniHub Logo"
+                  className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
+                />
               </div>
               <h1 className="text-xl md:text-3xl font-black tracking-tighter uppercase hidden sm:block">
                 ANI<span className="text-[#ff00ff]">HUB</span>
@@ -191,13 +222,19 @@ const App = () => {
           </div>
 
           <div className="flex-1 max-w-xl mx-2 md:mx-10">
-            <input
-              type="text"
-              placeholder="Поиск..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className={`w-full py-2.5 md:py-4 px-4 md:px-6 rounded-xl md:rounded-2xl glass border-2 transition-all font-bold text-xs md:text-sm ${isDarkMode ? 'bg-white/5 border-transparent focus:border-[#ff00ff]' : 'bg-white border-slate-200 text-slate-900'}`}
-            />
+    <div className="flex-1 max-w-xl mx-2 md:mx-10">
+  <input
+    type="text"
+    placeholder="Поиск..."
+    value={searchQuery}
+    onChange={(e) => setSearchQuery(e.target.value)}
+    className={`w-full py-2.5 md:py-4 px-4 md:px-6 rounded-xl md:rounded-2xl glass border-2 transition-all font-bold text-xs md:text-sm 
+      ${isDarkMode 
+        ? 'bg-white/5 border-transparent focus:border-[#ff00ff] text-white placeholder-white/40' 
+        : 'bg-white border-slate-200 text-slate-900 focus:border-[#ff00ff] placeholder-slate-400 shadow-sm'
+      }`}
+  />
+</div>
           </div>
 
           <div className="flex items-center gap-3 md:gap-6 shrink-0">
@@ -265,7 +302,7 @@ const App = () => {
           <div className="glass p-6 md:p-8 rounded-3xl md:rounded-[40px] sticky top-32 border-white/5">
             <p className="text-xs font-black uppercase opacity-50 mb-6 tracking-[0.2em] text-center">Категории</p>
             <div className="grid grid-cols-2 lg:grid-cols-1 gap-3">
-              <button onClick={() => setActiveGenre(null)} className={`py-3 md:py-4 rounded-xl md:rounded-2xl text-[10px] md:text-sm font-black uppercase transition-all ${!activeGenre ? 'bg-gradient-to-r from-[#ff00ff] to-[#00ffff] text-white' : 'bg-white/5'}`}>🌈 Все жанры</button>
+              <button onClick={() => setActiveGenre(null)} className={`py-3 md:py-4 rounded-xl md:rounded-2xl text-[10px] md:text-sm font-black uppercase transition-all ${!activeGenre ? 'bg-gradient-to-r from-[#ff00ff] to-[#00ffff] text-white' : 'bg-white/5'}`}> 🧩 Все жанры</button>
               {GENRES.map(g => (
                 <button key={g.id} onClick={() => setActiveGenre(g.id)} className={`py-3 md:py-4 rounded-xl md:rounded-2xl text-[10px] md:text-sm font-black uppercase transition-all ${activeGenre === g.id ? 'bg-gradient-to-r from-[#ff00ff] to-[#00ffff] text-white' : 'bg-white/5'}`}>
                   {g.icon} {g.name}
@@ -363,6 +400,7 @@ const App = () => {
                   { label: 'Формат', value: selectedItem.kind, color: 'text-cyan-400' },
                   { label: 'Год', value: selectedItem.aired_on?.split('-')[0], color: 'text-white' },
                   { label: 'Статус', value: selectedItem.status, color: 'text-green-400' }
+                  
                 ].map((info, i) => (
                   <div key={i} className="bg-white/5 p-4 rounded-2xl border border-white/5">
                     <p className="text-white/20 text-[9px] font-black uppercase mb-1">{info.label}</p>
@@ -412,6 +450,36 @@ const App = () => {
               )}
             </div>
           </div>
+{/* Opisaniye Bloki */}
+<div className="mt-6 border border-white/5 rounded-3xl overflow-hidden bg-white/5 transition-all duration-500">
+  {/* Tugma */}
+  <button 
+    onClick={() => setIsDescOpen(!isDescOpen)}
+    className="w-full flex items-center justify-between p-5 hover:bg-white/5 transition-colors"
+  >
+    <p className="text-[10px] font-black text-[#ff00ff] uppercase tracking-[0.2em]">Описание ✨</p>
+    
+    {/* isDescOpen true (ochiq) bo'lganda rotate-180 bo'lib uchi pastga qaraydi */}
+    {/* isDescOpen false (yopiq) bo'lganda rotate-0 bo'lib uchi tepaga qaraydi */}
+    <span className={`text-[#ff00ff] transition-transform duration-300 ${isDescOpen ? 'rotate-180' : 'rotate-0'}`}>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M18 15l-6-6-6 6"/> {/* Bu boshlang'ichda tepaga qaragan ^ shakl */}
+      </svg>
+    </span>
+  </button>
+
+  {/* Ochiladigan qism */}
+  <div className={`transition-all duration-500 ease-in-out overflow-hidden ${isDescOpen ? 'max-h-[1000px] opacity-100' : 'max-h-0 opacity-0'}`}>
+    <div className="p-5 pt-0 border-t border-white/5">
+      <div 
+        className="text-xs md:text-sm text-white/70 leading-relaxed prose prose-invert max-h-80 overflow-y-auto no-scrollbar"
+        dangerouslySetInnerHTML={{ 
+          __html: selectedItem?.description || '<span class="opacity-50 italic animate-pulse">Загрузка описания...</span>' 
+        }}
+      />
+    </div>
+  </div>
+</div>
         </div>
       )}
 
@@ -489,21 +557,32 @@ const App = () => {
         </div>
       )}
 
-      {/* Toast */}
+     {/* Toast */}
       {showToast && history.length > 0 && (
         <div className="fixed bottom-6 right-6 z-[10001] animate-fade-in w-[calc(100%-3rem)] md:w-96">
           <div 
             onClick={() => setSelectedItem(history[0])}
-            className="glass p-4 rounded-2xl border-2 border-[#ff00ff] flex items-center gap-4 cursor-pointer hover:scale-105 transition-transform shadow-[0_0_30px_rgba(255,0,255,0.3)]"
+            className={`p-4 rounded-2xl border-2 border-[#ff00ff] flex items-center gap-4 cursor-pointer hover:scale-105 transition-all shadow-[0_10px_40px_rgba(255,0,255,0.2)] 
+              ${isDarkMode 
+                ? 'bg-[#12121a]/95 backdrop-blur-xl text-white' 
+                : 'bg-white text-slate-900'
+              }`}
           >
-            <div className="w-12 h-16 shrink-0 rounded-lg overflow-hidden">
+            <div className="w-12 h-16 shrink-0 rounded-lg overflow-hidden border border-white/10">
               <img src={getImg(history[0])} className="w-full h-full object-cover" alt="" />
             </div>
             <div className="flex-1 overflow-hidden">
               <p className="text-[10px] font-black uppercase text-[#ff00ff] mb-1">Продолжить? ✨</p>
-              <h4 className="text-xs font-black text-white truncate uppercase italic">{history[0].russian || history[0].name}</h4>
+              <h4 className={`text-xs font-black truncate uppercase italic ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                {history[0].russian || history[0].name}
+              </h4>
             </div>
-            <button onClick={(e) => { e.stopPropagation(); setShowToast(false); }} className="text-white/40 hover:text-white text-xl p-2">×</button>
+            <button 
+              onClick={(e) => { e.stopPropagation(); setShowToast(false); }} 
+              className={`text-xl p-2 transition-colors ${isDarkMode ? 'text-white/40 hover:text-white' : 'text-slate-400 hover:text-slate-900'}`}
+            >
+              ×
+            </button>
           </div>
         </div>
       )}
@@ -512,6 +591,30 @@ const App = () => {
         <h2 className="text-2xl md:text-4xl font-black uppercase text-white mb-4">ANI<span className="text-[#ff00ff]">HUB</span></h2>
         <p className="text-[10px] font-black uppercase tracking-[0.5em] opacity-20 text-white">© 2026 Developed by @Sh1zoK1ll</p>
       </footer>
+
+      <style>{`
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes scroll { 0% { transform: translateX(0); } 100% { transform: translateX(calc(-320px * 15 - 2.5rem * 15)); } }
+  
+  .animate-fade-in { animation: fadeIn 0.4s ease-out forwards; }
+  .animate-infinite-scroll { 
+    display: flex; 
+    width: max-content; 
+    animation: scroll 60s linear infinite; 
+    will-change: transform; /* GPU uchun optimizatsiya */
+    backface-visibility: hidden;
+  }
+  
+  /* Kuchsiz qurilmalarda blur effektini o'chirish yoki kamaytirish */
+  .glass { 
+    backdrop-filter: blur(10px); 
+    -webkit-backdrop-filter: blur(10px); 
+    background: ${isDarkMode ? 'rgba(15, 15, 20, 0.8)' : 'rgba(255, 255, 255, 0.9)'}; 
+  }
+
+  /* Rasm yuklanguncha joyini tayyorlab turish */
+  .img-container { aspect-ratio: 3/4.5; background: #1a1a1a; overflow: hidden; }
+`}</style>
     </div>
   );
 };
