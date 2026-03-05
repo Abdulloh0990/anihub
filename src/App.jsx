@@ -1,2455 +1,2179 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import logo from './img/logo.png';
+import React, {
+  useState, useEffect, useRef, useMemo, useCallback,
+  memo, lazy, Suspense
+} from 'react';
 
-// ==================== CONSTANTS & CONFIGURATION ====================
-const API = 'https://shikimori.one/api';
-const ASSETS = 'https://shikimori.one';
-const STORAGE_VERSION = 'v8_ultimate';
-const AUTO_SAVE_DELAY = 1500;
-// YANGI:
-const SESSION_TIMEOUT = 30 * 24 * 60 * 60 * 1000; // 30 DAYS
+/* ═══════════════════════════════════════════════════════════════
+   STORAGE — localStorage (reload-safe) + cloud (cross-device)
+═══════════════════════════════════════════════════════════════ */
+const LS = {
+  get:  k => { try { return localStorage.getItem(k); } catch { return null; } },
+  set:  (k,v) => { try { localStorage.setItem(k,String(v)); } catch {} },
+  del:  k => { try { localStorage.removeItem(k); } catch {} },
+  json: k => { try { const v=localStorage.getItem(k); return v?JSON.parse(v):null; } catch { return null; } },
+};
+const CS = {
+  get: async k => { try { const r=await window.storage?.get(k); return r?.value??null; } catch { return null; } },
+  set: async (k,v) => { try { await window.storage?.set(k,v); } catch {} },
+  del: async k => { try { await window.storage?.delete(k); } catch {} },
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   CONSTANTS
+═══════════════════════════════════════════════════════════════ */
+const API         = 'https://shikimori.one/api';
+const ASSETS      = 'https://shikimori.one';
+const VER         = 'v17';
+const SAVE_DELAY  = 1400;
+const SESSION_TTL = 90*24*3600*1000;
+const PER_PAGE    = 28;
+const TREND_PER   = 28;
+const CLOUD_KEY   = 'aniHub_v17_data';
+const SESS_KEY    = 'aniHub_v17_sess';
+const USER_KEY    = 'aniHub_v17_user';
+
+const THEMES = {
+  ocean:  {n:'Океан',  i:'🌊', p:'#22d3ee', s:'#0ea5e9', b:'#020c14', m:'#051220'},
+  royal:  {n:'Аметист',i:'💎', p:'#a78bfa', s:'#7c3aed', b:'#080412', m:'#100820'},
+  sunset: {n:'Закат',  i:'🌅', p:'#fb923c', s:'#ef4444', b:'#140800', m:'#1e0d02'},
+  forest: {n:'Лес',    i:'🌲', p:'#4ade80', s:'#16a34a', b:'#011208', m:'#041a0a'},
+  rose:   {n:'Роза',   i:'🌸', p:'#f472b6', s:'#db2777', b:'#130010', m:'#1c0018'},
+  gold:   {n:'Золото', i:'✨', p:'#fbbf24', s:'#d97706', b:'#130f00', m:'#1e1600'},
+  cyber:  {n:'Кибер',  i:'🤖', p:'#39ff14', s:'#00cc6a', b:'#000d06', m:'#011408'},
+  ice:    {n:'Лёд',    i:'❄️', p:'#93c5fd', s:'#3b82f6', b:'#02080e', m:'#040e18'},
+};
 
 const GENRES = [
-  { id: 1, name: 'Сёнен', icon: '🔥', gradient: 'from-red-500 to-orange-500', desc: 'Боевики и приключения' },
-  { id: 4, name: 'Комедия', icon: '😂', gradient: 'from-yellow-400 to-pink-400', desc: 'Смешные и веселые' },
-  { id: 10, name: 'Фэнтези', icon: '🧙', gradient: 'from-purple-500 to-indigo-500', desc: 'Магия и волшебство' },
-  { id: 2, name: 'Приключения', icon: '🗺️', gradient: 'from-green-400 to-cyan-400', desc: 'Путешествия и открытия' },
-  { id: 8, name: 'Драма', icon: '😢', gradient: 'from-blue-500 to-purple-500', desc: 'Эмоциональные истории' },
-  { id: 7, name: 'Мистика', icon: '🔮', gradient: 'from-violet-500 to-purple-600', desc: 'Тайны и загадки' },
-  { id: 24, name: 'Фантастика', icon: '🚀', gradient: 'from-cyan-400 to-blue-500', desc: 'Будущее и технологии' },
-  { id: 22, name: 'Романтика', icon: '❤️', gradient: 'from-pink-500 to-rose-500', desc: 'Любовные истории' },
-  { id: 6, name: 'Демоны', icon: '👿', gradient: 'from-red-600 to-black', desc: 'Темная сторона' },
-  { id: 11, name: 'Игры', icon: '🎮', gradient: 'from-indigo-500 to-cyan-500', desc: 'Виртуальные миры' }
+  {id:1, n:'Сёнен',    e:'🔥'},{id:4,  n:'Комедия',   e:'😂'},
+  {id:10,n:'Фэнтези',  e:'🧙'},{id:2,  n:'Приключения',e:'🗺️'},
+  {id:8, n:'Драма',    e:'😢'},{id:7,  n:'Мистика',    e:'🔮'},
+  {id:24,n:'Sci-Fi',   e:'🚀'},{id:22, n:'Романтика',  e:'❤️'},
+  {id:6, n:'Демоны',   e:'👿'},{id:14, n:'Ужасы',      e:'👻'},
+  {id:36,n:'Слайс',    e:'☕'},{id:11, n:'Игры',        e:'🎮'},
+  {id:37,n:'Сверхъест',e:'🌟'},{id:23, n:'Школа',       e:'🏫'},
 ];
 
 const RANKS = [
-  { min: 1, label: 'Новичок', color: 'text-gray-400', badge: '🌱', glow: 'shadow-gray-500/50' },
-  { min: 10, label: 'Любитель', color: 'text-blue-400', badge: '⚡', glow: 'shadow-blue-500/50' },
-  { min: 30, label: 'Ценитель', color: 'text-purple-400', badge: '💎', glow: 'shadow-purple-500/50' },
-  { min: 60, label: 'Мастер', color: 'text-orange-400', badge: '🔥', glow: 'shadow-orange-500/50' },
-  { min: 85, label: 'Элита', color: 'text-red-500', badge: '👑', glow: 'shadow-red-500/50' },
-  { min: 100, label: 'Легенда', color: 'text-[#ff00ff]', badge: '⭐', glow: 'shadow-[#ff00ff]/80' }
+  {min:1,  l:'Новичок',  c:'#64748b',b:'🌱'},
+  {min:10, l:'Зритель',  c:'#3b82f6',b:'⚡'},
+  {min:30, l:'Ценитель', c:'#a855f7',b:'💎'},
+  {min:60, l:'Мастер',   c:'#f97316',b:'🔥'},
+  {min:85, l:'Элита',    c:'#ef4444',b:'👑'},
+  {min:100,l:'Легенда',  c:'#eab308',b:'⭐'},
 ];
 
-const ACHIEVEMENTS = [
-  { id: 'first_anime', name: 'Первый шаг', desc: 'Просмотрите первое аниме', icon: '🎬', xp: 10 },
-  { id: 'rate_10', name: 'Критик', desc: 'Оцените 10 аниме', icon: '⭐', xp: 50 },
-  { id: 'complete_50', name: 'Марафонец', desc: 'Завершите 50 аниме', icon: '🏃', xp: 100 },
-  { id: 'level_10', name: 'Опытный', desc: 'Достигните 10 уровня', icon: '💪', xp: 75 },
-  { id: 'binge_watcher', name: 'Запойный', desc: 'Просмотрите 5 аниме за день', icon: '📺', xp: 30 },
-  { id: 'genre_master', name: 'Мастер жанров', desc: 'Все жанры освоены', icon: '🎭', xp: 150 },
-  { id: 'social', name: 'Социальный', desc: 'Добавьте 20 в избранное', icon: '💬', xp: 40 },
-  { id: 'reviewer', name: 'Рецензент', desc: 'Напишите 10 заметок', icon: '📝', xp: 60 },
-  { id: 'collector', name: 'Коллекционер', desc: '100 аниме в библиотеке', icon: '📚', xp: 200 },
-  { id: 'perfectionist', name: 'Перфекционист', desc: 'Поставьте 50 оценок "10"', icon: '🌟', xp: 150 },
-  { id: 'early_bird', name: 'Ранняя пташка', desc: 'Зайдите в 6:00 утра', icon: '🌅', xp: 25 },
-  { id: 'night_owl', name: 'Полуночник', desc: 'Зайдите после полуночи', icon: '🦉', xp: 25 },
-  { id: 'week_streak', name: 'Неделя', desc: '7 дней подряд', icon: '📅', xp: 100 },
-  { id: 'explorer', name: 'Исследователь', desc: 'Просмотрите все жанры', icon: '🗺️', xp: 80 },
-  { id: 'speed_watcher', name: 'Скоростной', desc: '10 серий за день', icon: '⚡', xp: 50 }
+const ACHS = [
+  {id:'first',  n:'Первый шаг',  d:'Первое аниме открыто',  e:'🎬',xp:10},
+  {id:'rate10', n:'Критик',      d:'Оценено 10 аниме',      e:'⭐',xp:50},
+  {id:'comp50', n:'Марафонец',   d:'Завершено 50 аниме',    e:'🏃',xp:100},
+  {id:'lv10',   n:'Опытный',     d:'Достигнут уровень 10',  e:'💪',xp:75},
+  {id:'night',  n:'Полуночник',  d:'Заход после полуночи',  e:'🦉',xp:25},
+  {id:'early',  n:'Утренник',    d:'Заход в 5–7 утра',      e:'🌅',xp:25},
+  {id:'fav20',  n:'Коллекционер',d:'20 в избранном',        e:'❤️',xp:40},
+  {id:'notes10',n:'Рецензент',   d:'10 заметок написано',   e:'📝',xp:60},
+  {id:'lib100', n:'Архивист',    d:'100 в библиотеке',      e:'📚',xp:200},
+  {id:'streak7',n:'Неделя',      d:'7 дней подряд',         e:'📅',xp:100},
+  {id:'search10',n:'Следопыт',   d:'10 уникальных поисков', e:'🔍',xp:30},
+  {id:'share5', n:'Блогер',      d:'Поделился 5 раз',       e:'📤',xp:20},
+  {id:'perf10', n:'Перфект',     d:'10 оценок «10»',        e:'🌟',xp:80},
+  {id:'genres', n:'Всеядный',    d:'Аниме всех жанров',     e:'🎭',xp:150},
 ];
 
-const THEMES = {
-  cyberpunk: {
-    name: 'Киберпанк',
-    icon: '🌃',
-    primary: '#ff00ff',
-    secondary: '#00ffff',
-    bg: 'from-[#0a0a0f] via-[#1a0a2e] to-[#0f0a1e]',
-    font: "'Orbitron', sans-serif"
-  },
-  synthwave: {
-    name: 'Синтвейв',
-    icon: '🌆',
-    primary: '#ff006e',
-    secondary: '#8338ec',
-    bg: 'from-[#1a0033] via-[#2d0052] to-[#0d001a]',
-    font: "'Audiowide', cursive"
-  },
-  matrix: {
-    name: 'Матрица',
-    icon: '💚',
-    primary: '#00ff00',
-    secondary: '#00cc00',
-    bg: 'from-black via-[#001a00] to-black',
-    font: "'Share Tech Mono', monospace"
-  },
-  sunset: {
-    name: 'Закат',
-    icon: '🌅',
-    primary: '#ff6b35',
-    secondary: '#f7931e',
-    bg: 'from-[#1a0a00] via-[#331100] to-[#0d0500]',
-    font: "'Righteous', cursive"
-  },
-  neon: {
-    name: 'Неон',
-    icon: '✨',
-    primary: '#ff0080',
-    secondary: '#00ff88',
-    bg: 'from-[#0f0022] via-[#220033] to-[#0f0022]',
-    font: "'Electrolize', sans-serif"
-  },
-  ocean: {
-    name: 'Океан',
-    icon: '🌊',
-    primary: '#00d4ff',
-    secondary: '#0066ff',
-    bg: 'from-[#001a33] via-[#002244] to-[#001122]',
-    font: "'Quicksand', sans-serif"
-  },
-  sakura: {
-    name: 'Сакура',
-    icon: '🌸',
-    primary: '#ff69b4',
-    secondary: '#ffb6c1',
-    bg: 'from-[#1a0a14] via-[#2d1a28] to-[#0f050a]',
-    font: "'Poppins', sans-serif"
-  },
-  tokyo: {
-    name: 'Токио',
-    icon: '🗼',
-    primary: '#ff3366',
-    secondary: '#3366ff',
-    bg: 'from-[#0a0a1a] via-[#1a0a2a] to-[#0a0514]',
-    font: "'Rajdhani', sans-serif"
-  }
-};
+const NAV = [
+  {k:'home',    l:'Главная',  i:'⊞'},
+  {k:'trending',l:'Тренды',   i:'📈'},
+  {k:'manga',   l:'Манга',    i:'📖'},
+  {k:'favs',    l:'Избранное',i:'♥'},
+  {k:'library', l:'Библиотека',i:'◈'},
+  {k:'history', l:'История',  i:'⏱'},
+  {k:'watchlist',l:'Список',  i:'◎'},
+  {k:'stats',   l:'Статы',    i:'📊'},
+];
 
-// Utility functions
-const getRank = (lvl) => {
-  return [...RANKS].reverse().find(r => lvl >= r.min) || RANKS[0];
-};
+const SORTS = [
+  {v:'popularity',l:'🔥 Поп.'},
+  {v:'ranked',    l:'★ Рейт.'},
+  {v:'aired_on',  l:'📅 Дата'},
+  {v:'name',      l:'🔤 А-Я'},
+];
 
-const hashPassword = async (password) => {
-  // Simple hash function (in production use proper crypto)
-  let hash = 0;
-  for (let i = 0; i < password.length; i++) {
-    const char = password.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash;
-  }
-  return Math.abs(hash).toString(36);
-};
+const YEARS = Array.from({length:36},(_,i)=>2025-i);
 
-const generateSessionToken = () => {
-  return Math.random().toString(36).substring(2) + Date.now().toString(36);
-};
+/* ═══════════════════════════════════════════════════════════════
+   PURE HELPERS
+═══════════════════════════════════════════════════════════════ */
+const getRank   = xp => { const lv=Math.floor(xp/100)+1; return [...RANKS].reverse().find(r=>lv>=r.min)??RANKS[0]; };
+const hashPw    = pw => { let h=0; for(const c of pw) h=(Math.imul(31,h)+c.charCodeAt(0))|0; return Math.abs(h).toString(36); };
+const genToken  = ()  => typeof crypto?.randomUUID==='function'?crypto.randomUUID():Math.random().toString(36)+Date.now().toString(36);
+const today     = ()  => new Date().toDateString();
+const fmt       = n   => n>=1000?(n/1000).toFixed(1)+'k':String(n??0);
+const imgSrc    = item=> { if(!item?.image) return ''; const p=item.image?.original??(typeof item.image==='string'?item.image:''); return p?(p.startsWith('http')?p:ASSETS+p):''; };
+const stripHtml = h   => h?h.replace(/<[^>]*>/g,' ').replace(/\[.*?\]/g,'').replace(/\s+/g,' ').trim():'';
+const mkUser    = (n='Гость')=>({name:n,bio:'Добро пожаловать в AniHub! 🌟',avatar:`https://api.dicebear.com/9.x/bottts-neutral/svg?seed=${n}`,xp:0,joinDate:new Date().toISOString(),lastLogin:null,loginStreak:0,totalLogins:0});
 
-// ==================== MAIN COMPONENT ====================
-const App = () => {
-  // ==================== AUTH STATE ====================
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [showAuthModal, setShowAuthModal] = useState(false);
-  const [authMode, setAuthMode] = useState('login');
-  const [authError, setAuthError] = useState('');
-  const [accounts, setAccounts] = useState({});
-  const [currentAccount, setCurrentAccount] = useState(null);
-  const [sessionToken, setSessionToken] = useState(null);
- const [rememberMe, setRememberMe] = useState(true);
+/* ═══════════════════════════════════════════════════════════════
+   GLOBAL CSS — injected once, updated on theme change
+═══════════════════════════════════════════════════════════════ */
+const buildCSS = (p,s,b,m) => `
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap');
 
-  // ==================== APP STATE ====================
-  const [view, setView] = useState('home');
-  const [content, setContent] = useState([]);
-  const [trending, setTrending] = useState([]);
-  const [selectedItem, setSelectedItem] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [activeGenre, setActiveGenre] = useState(null);
-  const [page, setPage] = useState(1);
-  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
-  const [showToast, setShowToast] = useState(false);
-  const [showAchievement, setShowAchievement] = useState(null);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [sortBy, setSortBy] = useState('popularity');
-  const [filterYear, setFilterYear] = useState(null);
-  const [viewMode, setViewMode] = useState('grid');
-  const [autoPlay, setAutoPlay] = useState(true);
-  const [isDescOpen, setIsDescOpen] = useState(false);
-  const [showFilters, setShowFilters] = useState(false);
-  const [notifications, setNotifications] = useState([]);
-  const [watchlist, setWatchlist] = useState([]);
-  const [friendsList, setFriendsList] = useState([]);
-  const [dailyGoal, setDailyGoal] = useState(3);
-  const [dailyProgress, setDailyProgress] = useState(0);
-  
-  const fileInputRef = useRef(null);
-  const scrollRef = useRef(null);
-  const saveTimerRef = useRef(null);
+*,*::before,*::after{box-sizing:border-box;-webkit-tap-highlight-color:transparent;margin:0;padding:0}
+html{scroll-behavior:smooth;height:100%}
+body{font-family:'Outfit',system-ui,sans-serif;background:${b};color:#fff;overflow-x:hidden;min-height:100dvh}
+img{user-select:none;-webkit-user-drag:none;display:block}
+input,textarea,select,button{font-family:'Outfit',system-ui,sans-serif;color-scheme:dark}
+a{color:inherit;text-decoration:none}
 
-  // ==================== USER DATA STATE ====================
-  const [isDarkMode, setIsDarkMode] = useState(true);
-  const [currentTheme, setCurrentTheme] = useState('cyberpunk');
-  const [library, setLibrary] = useState({});
-  const [history, setHistory] = useState([]);
-  const [ratings, setRatings] = useState({});
-  const [achievements, setAchievements] = useState([]);
-  const [favorites, setFavorites] = useState([]);
-  const [notes, setNotes] = useState({});
-  const [user, setUser] = useState({
-    name: 'Гость',
-    avatar: 'https://api.dicebear.com/7.x/pixel-art/svg?seed=Guest',
-    bio: 'Добро пожаловать в AniHub! 🌟',
-    xp: 0,
-    joinDate: new Date().toISOString(),
-    lastLogin: null,
-    loginStreak: 0,
-    totalLogins: 0
-  });
+::-webkit-scrollbar{width:3px;height:3px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:${p}44;border-radius:99px}
+::-webkit-scrollbar-thumb:hover{background:${p}88}
+.ns{scrollbar-width:none;-ms-overflow-style:none}
+.ns::-webkit-scrollbar{display:none}
 
-  const theme = THEMES[currentTheme];
+:root{
+  --p:${p};--s:${s};--base:${b};--mid:${m};
+  --glass:rgba(255,255,255,.05);
+  --glass-b:rgba(255,255,255,.09);
+  --dim:rgba(255,255,255,.4);
+  --text:rgba(255,255,255,.85);
+  --card-bg:rgba(255,255,255,.04);
+  --r:16px;
+}
 
-  // ==================== INITIALIZE APP ====================
-  useEffect(() => {
-    // Load accounts from localStorage
-    const storedAccounts = localStorage.getItem('aniHub_accounts_v7');
-    if (storedAccounts) {
-      setAccounts(JSON.parse(storedAccounts));
-    }
+/* ── KEYFRAMES ── */
+@keyframes fadeUp   {from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeDown {from{opacity:0;transform:translateY(-14px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeIn   {from{opacity:0}to{opacity:1}}
+@keyframes slideUp  {from{opacity:0;transform:translateY(100%)}to{opacity:1;transform:translateY(0)}}
+@keyframes scaleIn  {from{opacity:0;transform:scale(.85) translateY(12px)}to{opacity:1;transform:scale(1) translateY(0)}}
+@keyframes pop      {0%{opacity:0;transform:scale(.55) rotate(-15deg)}65%{transform:scale(1.08) rotate(3deg)}100%{opacity:1;transform:scale(1) rotate(0)}}
+@keyframes shimmer  {0%{background-position:-800px 0}100%{background-position:800px 0}}
+@keyframes spin     {to{transform:rotate(360deg)}}
+@keyframes glow     {0%,100%{box-shadow:0 0 12px ${p}55,0 0 24px ${p}22}50%{box-shadow:0 0 24px ${p}99,0 0 50px ${p}44}}
+@keyframes float    {0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
+@keyframes marquee  {0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
+@keyframes toastIn  {from{opacity:0;transform:translateX(28px) scale(.9)}to{opacity:1;transform:translateX(0) scale(1)}}
+@keyframes barFill  {from{width:0}to{width:var(--bar-w,100%)}}
+@keyframes ripple   {0%{transform:scale(0);opacity:.5}100%{transform:scale(3.5);opacity:0}}
+@keyframes heartPop {0%{transform:scale(1)}40%{transform:scale(1.5)}70%{transform:scale(.9)}100%{transform:scale(1)}}
+@keyframes trendIn  {from{opacity:0;transform:translateX(-20px)}to{opacity:1;transform:translateX(0)}}
+@keyframes posterIn {from{opacity:0;transform:scale(.94)}to{opacity:1;transform:scale(1)}}
+@keyframes descSlide{from{opacity:0;max-height:0;transform:translateY(-8px)}to{opacity:1;max-height:600px;transform:translateY(0)}}
+@keyframes overlayIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes countUp  {from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+@keyframes progressBar{from{width:0}to{width:100%}}
+@keyframes spinnerDash{0%{stroke-dashoffset:200}100%{stroke-dashoffset:0}}
 
-    // Check for existing session
-    const storedSession = localStorage.getItem('aniHub_session');
-    const storedUsername = localStorage.getItem('aniHub_username');
-    
-    if (storedSession && storedUsername) {
-      const session = JSON.parse(storedSession);
-      
-      // Check if session is still valid
-      if (Date.now() - session.timestamp < SESSION_TIMEOUT) {
-        autoLogin(storedUsername, session.token);
-      } else {
-        // Session expired
-        localStorage.removeItem('aniHub_session');
-        localStorage.removeItem('aniHub_username');
-      }
-    }
+/* ── UTILITY CLASSES ── */
+.fu{animation:fadeUp .36s cubic-bezier(.4,0,.2,1) both}
+.fd{animation:fadeDown .3s ease both}
+.fi{animation:fadeIn .24s ease both}
+.su{animation:slideUp .4s cubic-bezier(.34,1.1,.64,1) both}
+.si{animation:scaleIn .32s cubic-bezier(.34,1.1,.64,1) both}
+.ap{animation:pop .48s cubic-bezier(.34,1.56,.64,1) both}
+.stagger>*:nth-child(1){animation-delay:.04s}
+.stagger>*:nth-child(2){animation-delay:.08s}
+.stagger>*:nth-child(3){animation-delay:.12s}
+.stagger>*:nth-child(4){animation-delay:.16s}
+.stagger>*:nth-child(5){animation-delay:.20s}
+.stagger>*:nth-child(n+6){animation-delay:.24s}
 
-    // Check for time-based achievements
-    checkTimeAchievements();
-  }, []);
+.glass{background:var(--glass);backdrop-filter:blur(14px);border:1px solid var(--glass-b)}
+.glass-dark{background:rgba(4,8,18,.96);backdrop-filter:blur(28px) saturate(180%);border:1px solid rgba(255,255,255,.08)}
+.card{background:var(--card-bg);border:1px solid rgba(255,255,255,.07);border-radius:var(--r)}
 
-  // ==================== USER STATS ====================
-  const userStats = useMemo(() => {
-    const level = Math.floor(user.xp / 100) + 1;
-    const currentLevelXP = user.xp % 100;
-    const totalWatched = Object.values(library).filter(a => a.status === 'completed').length;
-    const totalRated = Object.keys(ratings).length;
-    const avgRating = totalRated > 0 
-      ? (Object.values(ratings).reduce((a, b) => a + b, 0) / totalRated).toFixed(1)
-      : 0;
-    const totalHours = Math.round(totalWatched * 4.5);
-    const genresWatched = new Set(
-      Object.values(library)
-        .filter(a => a.status === 'completed')
-        .flatMap(a => a.genres || [])
-    ).size;
-    const totalNotes = Object.keys(notes).filter(k => notes[k].text).length;
-    const perfectRatings = Object.values(ratings).filter(r => r === 10).length;
-    const watchingNow = Object.values(library).filter(a => a.status === 'watching').length;
+.shimmer{background:linear-gradient(90deg,rgba(255,255,255,0) 0%,rgba(255,255,255,.08) 50%,rgba(255,255,255,0) 100%);background-size:800px 100%;animation:shimmer 1.9s ease-in-out infinite}
 
-    return { 
-      level, 
-      xp: currentLevelXP, 
-      totalXp: user.xp, 
-      nextLevelAt: 100,
-      totalWatched,
-      totalRated,
-      avgRating,
-      totalHours,
-      genresWatched,
-      totalNotes,
-      perfectRatings,
-      librarySize: Object.keys(library).length,
-      favoritesCount: favorites.length,
-      watchingNow,
-      rank: getRank(level)
-    };
-  }, [user.xp, library, ratings, notes, favorites]);
+.btn-primary{background:linear-gradient(135deg,${p},${s});color:#fff;border:none;cursor:pointer;font-weight:800;transition:all .2s;font-family:'Outfit',system-ui,sans-serif}
+.btn-primary:hover{filter:brightness(1.14);transform:translateY(-1px);box-shadow:0 8px 24px ${p}44}
+.btn-primary:active{transform:scale(.97)}
 
-  // ==================== AUTH FUNCTIONS ====================
-  const checkTimeAchievements = () => {
-    const hour = new Date().getHours();
-    
-    if (hour >= 5 && hour < 7 && !achievements.includes('early_bird')) {
-      unlockAchievement('early_bird');
-    }
-    if ((hour >= 0 && hour < 3) && !achievements.includes('night_owl')) {
-      unlockAchievement('night_owl');
-    }
-  };
+.btn-ghost{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.7);cursor:pointer;font-weight:700;transition:all .2s;font-family:'Outfit',system-ui,sans-serif}
+.btn-ghost:hover{background:rgba(255,255,255,.13);border-color:rgba(255,255,255,.2)}
 
-  const unlockAchievement = (achievementId) => {
-    if (!isLoggedIn || achievements.includes(achievementId)) return;
-    
-    const achievement = ACHIEVEMENTS.find(a => a.id === achievementId);
-    if (achievement) {
-      setAchievements(prev => [...prev, achievementId]);
-      setUser(prev => ({ ...prev, xp: prev.xp + achievement.xp }));
-      setShowAchievement(achievement);
-      setTimeout(() => setShowAchievement(null), 5000);
-    }
-  };
+.input{background:rgba(255,255,255,.07);border:1.5px solid rgba(255,255,255,.1);color:#fff;outline:none;transition:all .22s;font-family:'Outfit',system-ui,sans-serif;font-weight:600}
+.input:focus{border-color:${p}88;box-shadow:0 0 0 3px ${p}15;background:rgba(255,255,255,.09)}
+.input::placeholder{color:rgba(255,255,255,.28);font-weight:500}
 
-  const handleRegister = async (username, password, email) => {
-    setAuthError('');
-    
-    if (!username || !password) {
-      setAuthError('Заполните все обязательные поля!');
-      return;
-    }
-    
-    if (accounts[username]) {
-      setAuthError('Это имя пользователя уже занято!');
-      return;
-    }
+.lc1{display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}
+.lc2{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.lc3{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.lc4{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
 
-    if (username.length < 3) {
-      setAuthError('Имя пользователя должно быть не менее 3 символов!');
-      return;
-    }
+input[type=range]{-webkit-appearance:none;appearance:none;height:6px;border-radius:99px;cursor:pointer;outline:none;border:none}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;border-radius:50%;background:white;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.5);transition:transform .15s}
+input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.2)}
 
-    if (password.length < 6) {
-      setAuthError('Пароль должен быть не менее 6 символов!');
-      return;
-    }
+/* ── CARD HOVER ── */
+.card-h{transition:transform .28s cubic-bezier(.4,0,.2,1),filter .28s ease,box-shadow .28s ease}
+.card-h:hover{transform:translateY(-6px) scale(1.025);filter:brightness(1.07)}
+.card-h:hover .card-overlay{opacity:1 !important}
+@media(hover:none){.card-h:hover{transform:none;filter:none}.card-h:active{transform:scale(.96)}}
 
-    const hashedPassword = await hashPassword(password);
-    const newAccount = {
-      username,
-      passwordHash: hashedPassword,
-      email,
-      createdAt: new Date().toISOString(),
-      userData: {
-        user: {
-          name: username,
-          avatar: `https://api.dicebear.com/7.x/pixel-art/svg?seed=${username}`,
-          bio: `Привет! Я ${username} и я люблю аниме! 🎬`,
-          xp: 0,
-          joinDate: new Date().toISOString(),
-          lastLogin: null,
-          loginStreak: 0,
-          totalLogins: 0
-        },
-        library: {},
-        history: [],
-        ratings: {},
-        achievements: [],
-        favorites: [],
-        notes: {},
-        watchlist: [],
-        theme: 'cyberpunk',
-        isDarkMode: true,
-        dailyGoal: 3,
-        dailyProgress: 0
-      }
-    };
+/* ── RESPONSIVE ── */
+/* Desktop nav visible only ≥1024 */
+.d-nav{display:none!important}
+@media(min-width:1024px){.d-nav{display:flex!important}}
+/* Mobile scroll nav visible only <1024 */
+.m-nav{display:flex!important}
+@media(min-width:1024px){.m-nav{display:none!important}}
+/* Sidebar visible only ≥1024 */
+.sidebar{display:none!important}
+@media(min-width:1024px){.sidebar{display:block!important}}
+/* Bottom nav hidden on desktop */
+.bot-nav{display:flex!important}
+@media(min-width:1024px){.bot-nav{display:none!important}}
+/* Logo text */
+.logo-txt{display:none}
+@media(min-width:420px){.logo-txt{display:inline}}
+/* Desk only */
+.desk{display:none!important}
+@media(min-width:1024px){.desk{display:flex!important}}
+/* Mobile genres strip (in toolbar) */
+.mob-genres{display:flex!important}
+@media(min-width:1024px){.mob-genres{display:none!important}}
+/* Search bar full on desktop */
+@media(max-width:420px){.search-bar{max-width:140px!important}}
 
-    const updatedAccounts = { ...accounts, [username]: newAccount };
-    setAccounts(updatedAccounts);
-    localStorage.setItem('aniHub_accounts_v7', JSON.stringify(updatedAccounts));
-    
-    // Show success notification
-    setNotifications(prev => [...prev, {
-      id: Date.now(),
-      type: 'success',
-      message: `Добро пожаловать, ${username}! Регистрация успешна 🎉`
-    }]);
-    
-    setTimeout(() => setAuthMode('login'), 1500);
-  };
+/* Main bottom padding for mobile bottom nav */
+@media(max-width:1023px){.main-scroll{padding-bottom:80px}}
 
-  const handleLogin = async (username, password) => {
-    setAuthError('');
-    
-    if (!username || !password) {
-      setAuthError('Заполните все поля!');
-      return;
-    }
+/* Card grid responsive */
+.card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(134px,1fr));gap:10px}
+@media(max-width:480px){.card-grid{grid-template-columns:repeat(auto-fill,minmax(108px,1fr));gap:8px}}
+@media(max-width:320px){.card-grid{grid-template-columns:repeat(2,1fr);gap:7px}}
 
-    const account = accounts[username];
-    
-    if (!account) {
-      setAuthError('Аккаунт не найден!');
-      return;
-    }
+/* Poster visible in article */
+article{overflow:visible!important}
 
-    const hashedPassword = await hashPassword(password);
-    
-    if (account.passwordHash !== hashedPassword) {
-      setAuthError('Неверный пароль!');
-      return;
-    }
+/* Trending grid */
+.trend-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px}
+@media(max-width:600px){.trend-grid{grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}}
+@media(max-width:360px){.trend-grid{grid-template-columns:repeat(2,1fr);gap:7px}}
 
-    // Create session
-    const token = generateSessionToken();
-    const session = {
-      token,
-      timestamp: Date.now()
-    };
+/* Description expand animation */
+.desc-expand{animation:descSlide .35s cubic-bezier(.4,0,.2,1) both;overflow:hidden}
 
-    // Load user data
-    const userData = account.userData;
-    
-    // Update login stats
-    const lastLogin = userData.user.lastLogin;
-    const now = new Date();
-    const lastLoginDate = lastLogin ? new Date(lastLogin) : null;
-    
-    let loginStreak = userData.user.loginStreak || 0;
-    if (lastLoginDate) {
-      const daysDiff = Math.floor((now - lastLoginDate) / (1000 * 60 * 60 * 24));
-      if (daysDiff === 1) {
-        loginStreak++;
-      } else if (daysDiff > 1) {
-        loginStreak = 1;
-      }
-    } else {
-      loginStreak = 1;
-    }
+/* Modal layout */
+.modal-inner{flex-direction:column}
+@media(min-width:1024px){.modal-inner{flex-direction:row!important}}
 
-    const updatedUser = {
-      ...userData.user,
-      lastLogin: now.toISOString(),
-      loginStreak,
-      totalLogins: (userData.user.totalLogins || 0) + 1
-    };
+/* Stats grid */
+.stats-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+@media(min-width:640px){.stats-grid{grid-template-columns:repeat(4,1fr)}}
 
-    setUser(updatedUser);
-    setLibrary(userData.library || {});
-    setHistory(userData.history || []);
-    setRatings(userData.ratings || {});
-    setAchievements(userData.achievements || []);
-    setFavorites(userData.favorites || []);
-    setNotes(userData.notes || {});
-    setWatchlist(userData.watchlist || []);
-    setCurrentTheme(userData.theme || 'cyberpunk');
-    setIsDarkMode(userData.isDarkMode !== undefined ? userData.isDarkMode : true);
-    setDailyGoal(userData.dailyGoal || 3);
-    setDailyProgress(userData.dailyProgress || 0);
+/* Profile sheet desktop center */
+@media(min-width:640px){
+  .prof-sheet{max-width:520px;margin:0 auto;border-radius:28px!important}
+}
 
-    setIsLoggedIn(true);
-    setCurrentAccount(username);
-    setSessionToken(token);
-    
-    // Save session
-    if (rememberMe) {
-      localStorage.setItem('aniHub_session', JSON.stringify(session));
-      localStorage.setItem('aniHub_username', username);
-    } else {
-      sessionStorage.setItem('aniHub_session', JSON.stringify(session));
-      sessionStorage.setItem('aniHub_username', username);
-    }
-    
-    setShowAuthModal(false);
-    
-    // Check streak achievement
-    if (loginStreak === 7 && !userData.achievements?.includes('week_streak')) {
-      setTimeout(() => unlockAchievement('week_streak'), 1000);
-    }
-    
-    // Welcome notification
-    setNotifications(prev => [...prev, {
-      id: Date.now(),
-      type: 'success',
-      message: `С возвращением, ${username}! 🎉 Серия входов: ${loginStreak} ${loginStreak === 1 ? 'день' : 'дня'}`
-    }]);
-  };
+/* Noise overlay */
+.noise-layer{position:fixed;inset:0;z-index:9999;pointer-events:none;opacity:.015;
+  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+`;
 
-  const autoLogin = async (username, token) => {
-    const account = accounts[username];
-    if (!account) return;
+/* ═══════════════════════════════════════════════════════════════
+   MICRO UI COMPONENTS
+═══════════════════════════════════════════════════════════════ */
+const Spinner = memo(({size=22,color='rgba(255,255,255,.5)'}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" style={{animation:'spin .7s linear infinite',flexShrink:0}}>
+    <circle cx="12" cy="12" r="9" fill="none" strokeWidth="2.5" stroke="rgba(255,255,255,.1)"/>
+    <path d="M12 3a9 9 0 0 1 9 9" fill="none" strokeWidth="2.5" stroke={color} strokeLinecap="round"/>
+  </svg>
+));
 
-    const userData = account.userData;
-    setUser(userData.user);
-    setLibrary(userData.library || {});
-    setHistory(userData.history || []);
-    setRatings(userData.ratings || {});
-    setAchievements(userData.achievements || []);
-    setFavorites(userData.favorites || []);
-    setNotes(userData.notes || {});
-    setWatchlist(userData.watchlist || []);
-    setCurrentTheme(userData.theme || 'cyberpunk');
-    setIsDarkMode(userData.isDarkMode !== undefined ? userData.isDarkMode : true);
-    setDailyGoal(userData.dailyGoal || 3);
-    setDailyProgress(userData.dailyProgress || 0);
-
-    setIsLoggedIn(true);
-    setCurrentAccount(username);
-    setSessionToken(token);
-  };
-
-  const handleLogout = () => {
-    if (confirm('Вы уверены, что хотите выйти из аккаунта?')) {
-      saveUserData();
-      
-      // Clear session
-      localStorage.removeItem('aniHub_session');
-      localStorage.removeItem('aniHub_username');
-      sessionStorage.removeItem('aniHub_session');
-      sessionStorage.removeItem('aniHub_username');
-      
-      setIsLoggedIn(false);
-      setCurrentAccount(null);
-      setSessionToken(null);
-      
-      // Reset to guest
-      setUser({
-        name: 'Гость',
-        avatar: 'https://api.dicebear.com/7.x/pixel-art/svg?seed=Guest',
-        bio: 'Добро пожаловать в AniHub! 🌟',
-        xp: 0,
-        joinDate: new Date().toISOString(),
-        lastLogin: null,
-        loginStreak: 0,
-        totalLogins: 0
-      });
-      setLibrary({});
-      setHistory([]);
-      setRatings({});
-      setAchievements([]);
-      setFavorites([]);
-      setNotes({});
-      setWatchlist([]);
-      setView('home');
-      
-      setNotifications(prev => [...prev, {
-        id: Date.now(),
-        type: 'info',
-        message: 'Вы вышли из аккаунта. До встречи! 👋'
-      }]);
-    }
-  };
-
-  const saveUserData = useCallback(() => {
-    if (!isLoggedIn || !currentAccount) return;
-
-    const updatedAccounts = {
-      ...accounts,
-      [currentAccount]: {
-        ...accounts[currentAccount],
-        lastLogin: new Date().toISOString(),
-        userData: {
-          user,
-          library,
-          history,
-          ratings,
-          achievements,
-          favorites,
-          notes,
-          watchlist,
-          theme: currentTheme,
-          isDarkMode,
-          dailyGoal,
-          dailyProgress
-        }
-      }
-    };
-
-    setAccounts(updatedAccounts);
-    localStorage.setItem('aniHub_accounts_v7', JSON.stringify(updatedAccounts));
-  }, [isLoggedIn, currentAccount, user, library, history, ratings, achievements, favorites, notes, watchlist, currentTheme, isDarkMode, dailyGoal, dailyProgress, accounts]);
-
-  // Debounced auto-save
-  useEffect(() => {
-    if (isLoggedIn && currentAccount) {
-      if (saveTimerRef.current) {
-        clearTimeout(saveTimerRef.current);
-      }
-      
-      saveTimerRef.current = setTimeout(() => {
-        saveUserData();
-      }, AUTO_SAVE_DELAY);
-      
-      return () => {
-        if (saveTimerRef.current) {
-          clearTimeout(saveTimerRef.current);
-        }
-      };
-    }
-  }, [user, library, history, ratings, achievements, favorites, notes, watchlist, currentTheme, isDarkMode, dailyGoal, dailyProgress, isLoggedIn, currentAccount, saveUserData]);
-
-  // ==================== ACHIEVEMENTS SYSTEM ====================
-  const checkAchievements = useCallback((type, data) => {
-    if (!isLoggedIn) return;
-    
-    const newAchievements = [];
-    
-    if (type === 'watch' && userStats.totalWatched === 1 && !achievements.includes('first_anime')) {
-      newAchievements.push('first_anime');
-    }
-    if (type === 'rate' && userStats.totalRated === 10 && !achievements.includes('rate_10')) {
-      newAchievements.push('rate_10');
-    }
-    if (type === 'complete' && userStats.totalWatched === 50 && !achievements.includes('complete_50')) {
-      newAchievements.push('complete_50');
-    }
-    if (type === 'level' && userStats.level === 10 && !achievements.includes('level_10')) {
-      newAchievements.push('level_10');
-    }
-    if (type === 'genre' && userStats.genresWatched === GENRES.length && !achievements.includes('genre_master')) {
-      newAchievements.push('genre_master');
-    }
-    if (type === 'favorite' && userStats.favoritesCount === 20 && !achievements.includes('social')) {
-      newAchievements.push('social');
-    }
-    if (type === 'note' && userStats.totalNotes === 10 && !achievements.includes('reviewer')) {
-      newAchievements.push('reviewer');
-    }
-    if (type === 'library' && userStats.librarySize === 100 && !achievements.includes('collector')) {
-      newAchievements.push('collector');
-    }
-    if (type === 'perfect' && userStats.perfectRatings === 50 && !achievements.includes('perfectionist')) {
-      newAchievements.push('perfectionist');
-    }
-    if (type === 'explorer' && userStats.genresWatched >= GENRES.length && !achievements.includes('explorer')) {
-      newAchievements.push('explorer');
-    }
-
-    if (newAchievements.length > 0) {
-      setAchievements(prev => [...prev, ...newAchievements]);
-      const achievement = ACHIEVEMENTS.find(a => a.id === newAchievements[0]);
-      if (achievement) {
-        unlockAchievement(newAchievements[0]);
-      }
-    }
-  }, [achievements, userStats, isLoggedIn]);
-
-  // ==================== DATA FETCHING ====================
-  const getImg = (item) => {
-    if (!item?.image) return 'https://via.placeholder.com/225x320?text=No+Image';
-    const path = item.image.original || (typeof item.image === 'string' ? item.image : '');
-    return path.startsWith('http') ? path : ASSETS + path;
-  };
-
-  const fetchData = async () => {
-    setLoading(true);
-    try {
-      const endpoint = view === 'manga' ? 'mangas' : 'animes';
-      let order = sortBy;
-      let url = `${API}/${endpoint}?limit=24&page=${page}&order=${order}`;
-      
-      if (searchQuery) url += `&search=${encodeURIComponent(searchQuery)}`;
-      if (activeGenre) url += `&genre=${activeGenre}`;
-      if (filterYear) url += `&season=${filterYear}`;
-
-      const res = await fetch(url);
-      const data = await res.json();
-      setContent(Array.isArray(data) ? data : []);
-
-      if (trending.length === 0) {
-        const trendRes = await fetch(`${API}/animes?limit=20&order=popularity`);
-        const trendData = await trendRes.json();
-        setTrending(trendData);
-      }
-    } catch (err) {
-      console.error("Ошибка загрузки:", err);
-      setNotifications(prev => [...prev, {
-        id: Date.now(),
-        type: 'error',
-        message: 'Ошибка загрузки данных. Попробуйте позже.'
-      }]);
-    } finally {
-      setTimeout(() => setLoading(false), 300);
-    }
-  };
-
-  useEffect(() => {
-    if (view !== 'collection' && view !== 'history' && view !== 'trending_list' && view !== 'favorites' && view !== 'watchlist') {
-      fetchData();
-    } else {
-      setLoading(false);
-    }
-  }, [view, searchQuery, activeGenre, page, sortBy, filterYear]);
-
-  useEffect(() => {
-    const fetchDescription = async () => {
-      if (selectedItem && selectedItem.id && !selectedItem.description) {
-        try {
-          const response = await fetch(`${API}/animes/${selectedItem.id}`);
-          const data = await response.json();
-          setSelectedItem(prev => ({
-            ...prev,
-            description: data.description_html || data.description || "Описание отсутствует.",
-            genres: data.genres || [],
-            studios: data.studios || [],
-            screenshots: data.screenshots || []
-          }));
-        } catch (error) {
-          console.error("Ошибка загрузки описания:", error);
-        }
-      }
-    };
-    fetchDescription();
-  }, [selectedItem?.id]);
-
-  // ==================== USER INTERACTIONS ====================
-  const handleRating = (item, score) => {
-    if (!isLoggedIn) {
-      setShowAuthModal(true);
-      setNotifications(prev => [...prev, {
-        id: Date.now(),
-        type: 'warning',
-        message: 'Войдите в аккаунт, чтобы оценивать аниме!'
-      }]);
-      return;
-    }
-    
-    setRatings(prev => ({ ...prev, [item.id]: score }));
-    if (!library[item.id]) updateLibraryStatus(item, 'planned');
-    setUser(prev => ({ ...prev, xp: prev.xp + 5 }));
-    checkAchievements('rate', { score });
-    if (score === 10) checkAchievements('perfect', {});
-    
-    setNotifications(prev => [...prev, {
-      id: Date.now(),
-      type: 'success',
-      message: `Вы оценили "${item.russian || item.name}" на ${score}/10! (+5 XP)`
-    }]);
-  };
-
-  const addToHistory = (item) => {
-    const newItem = { 
-      ...item, 
-      date: new Date().toLocaleString('ru-RU'), 
-      timestamp: Date.now() 
-    };
-    setHistory(prev => [newItem, ...prev.filter(h => h.id !== item.id)].slice(0, 100));
-    
-    if (isLoggedIn) {
-      setUser(prev => ({ ...prev, xp: prev.xp + 2 }));
-      
-      // Update daily progress
-      const today = new Date().toDateString();
-      const lastProgressDate = localStorage.getItem('lastProgressDate');
-      
-      if (lastProgressDate !== today) {
-        setDailyProgress(1);
-        localStorage.setItem('lastProgressDate', today);
-      } else {
-        setDailyProgress(prev => Math.min(prev + 1, dailyGoal));
-      }
-    }
-  };
-
-  const updateLibraryStatus = (item, status) => {
-    if (!isLoggedIn) {
-      setShowAuthModal(true);
-      setNotifications(prev => [...prev, {
-        id: Date.now(),
-        type: 'warning',
-        message: 'Войдите в аккаунт, чтобы добавлять аниме в коллекцию!'
-      }]);
-      return;
-    }
-    
-    const wasCompleted = library[item.id]?.status === 'completed';
-    const isCompleting = status === 'completed' && !wasCompleted;
-    
-    setLibrary(prev => ({ 
-      ...prev, 
-      [item.id]: { 
-        ...item, 
-        status, 
-        addedDate: new Date().toISOString(),
-        genres: item.genres || []
-      } 
-    }));
-    
-    const xpGain = isCompleting ? 25 : 10;
-    setUser(prev => ({ ...prev, xp: prev.xp + xpGain }));
-    
-    if (isCompleting) {
-      checkAchievements('complete', { item });
-      checkAchievements('genre', {});
-      checkAchievements('explorer', {});
-    }
-    checkAchievements('library', {});
-    
-    const statusLabels = {
-      watching: 'Смотрю',
-      planned: 'В планах',
-      completed: 'Завершено'
-    };
-    
-    setNotifications(prev => [...prev, {
-      id: Date.now(),
-      type: 'success',
-      message: `"${item.russian || item.name}" → ${statusLabels[status]} (+${xpGain} XP)`
-    }]);
-  };
-
-  const toggleFavorite = (item) => {
-    if (!isLoggedIn) {
-      setShowAuthModal(true);
-      setNotifications(prev => [...prev, {
-        id: Date.now(),
-        type: 'warning',
-        message: 'Войдите в аккаунт, чтобы добавлять в избранное!'
-      }]);
-      return;
-    }
-    
-    setFavorites(prev => {
-      const exists = prev.find(f => f.id === item.id);
-      if (exists) {
-        setNotifications(prevNot => [...prevNot, {
-          id: Date.now(),
-          type: 'info',
-          message: `Удалено из избранного`
-        }]);
-        return prev.filter(f => f.id !== item.id);
-      } else {
-        setUser(prevUser => ({ ...prevUser, xp: prevUser.xp + 5 }));
-        checkAchievements('favorite', {});
-        setNotifications(prevNot => [...prevNot, {
-          id: Date.now(),
-          type: 'success',
-          message: `Добавлено в избранное! (+5 XP)`
-        }]);
-        return [...prev, { ...item, favoritedDate: new Date().toISOString() }];
-      }
-    });
-  };
-
-  const toggleWatchlist = (item) => {
-    if (!isLoggedIn) {
-      setShowAuthModal(true);
-      return;
-    }
-    
-    setWatchlist(prev => {
-      const exists = prev.find(w => w.id === item.id);
-      if (exists) {
-        return prev.filter(w => w.id !== item.id);
-      } else {
-        setUser(prevUser => ({ ...prevUser, xp: prevUser.xp + 3 }));
-        return [...prev, { ...item, addedDate: new Date().toISOString() }];
-      }
-    });
-  };
-
-  const addNote = (itemId, noteText) => {
-    if (!isLoggedIn) return;
-    setNotes(prev => ({
-      ...prev,
-      [itemId]: { text: noteText, date: new Date().toISOString() }
-    }));
-    if (noteText && !notes[itemId]?.text) checkAchievements('note', {});
-  };
-
-  const handleAvatarChange = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      if (file.size > 5000000) {
-        setNotifications(prev => [...prev, {
-          id: Date.now(),
-          type: 'error',
-          message: 'Файл слишком большой! Максимум 5MB'
-        }]);
-        return;
-      }
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setUser({ ...user, avatar: reader.result });
-        setNotifications(prev => [...prev, {
-          id: Date.now(),
-          type: 'success',
-          message: 'Аватар обновлен!'
-        }]);
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
-  const getStatusLabel = (id) => {
-    const map = { watching: 'Смотрю', planned: 'В планах', completed: 'Завершено' };
-    return library[id]?.status ? map[library[id].status] : null;
-  };
-
-  const exportData = () => {
-    if (!isLoggedIn) {
-      setNotifications(prev => [...prev, {
-        id: Date.now(),
-        type: 'warning',
-        message: 'Войдите в аккаунт для экспорта данных!'
-      }]);
-      return;
-    }
-    
-    const data = {
-      version: STORAGE_VERSION,
-      exportDate: new Date().toISOString(),
-      account: currentAccount,
-      user,
-      library,
-      history,
-      ratings,
-      achievements,
-      favorites,
-      notes,
-      watchlist,
-      theme: currentTheme,
-      isDarkMode,
-      dailyGoal,
-      dailyProgress
-    };
-    
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `anihub-${currentAccount}-${Date.now()}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    
-    setNotifications(prev => [...prev, {
-      id: Date.now(),
-      type: 'success',
-      message: 'Данные успешно экспортированы! ✅'
-    }]);
-  };
-
-  const importData = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        try {
-          const data = JSON.parse(event.target.result);
-          
-          if (data.user) setUser(data.user);
-          if (data.library) setLibrary(data.library);
-          if (data.history) setHistory(data.history);
-          if (data.ratings) setRatings(data.ratings);
-          if (data.achievements) setAchievements(data.achievements);
-          if (data.favorites) setFavorites(data.favorites);
-          if (data.notes) setNotes(data.notes);
-          if (data.watchlist) setWatchlist(data.watchlist);
-          if (data.theme) setCurrentTheme(data.theme);
-          if (data.isDarkMode !== undefined) setIsDarkMode(data.isDarkMode);
-          if (data.dailyGoal) setDailyGoal(data.dailyGoal);
-          if (data.dailyProgress !== undefined) setDailyProgress(data.dailyProgress);
-          
-          setNotifications(prev => [...prev, {
-            id: Date.now(),
-            type: 'success',
-            message: 'Данные успешно импортированы! ✅'
-          }]);
-        } catch (err) {
-          setNotifications(prev => [...prev, {
-            id: Date.now(),
-            type: 'error',
-            message: 'Ошибка импорта данных! Проверьте файл. ❌'
-          }]);
-          console.error('Import error:', err);
-        }
-      };
-      reader.readAsText(file);
-    }
-  };
-
-  const displayContent = () => {
-    if (view === 'collection') return Object.values(library);
-    if (view === 'history') return history;
-    if (view === 'trending_list') return trending;
-    if (view === 'favorites') return favorites;
-    if (view === 'watchlist') return watchlist;
-    return content;
-  };
-
-  const finalContent = displayContent();
-
-  const randomAnime = () => {
-    if (content.length > 0) {
-      const random = content[Math.floor(Math.random() * content.length)];
-      setSelectedItem(random);
-      addToHistory(random);
-    }
-  };
-
-  const deleteAccount = () => {
-    if (!isLoggedIn || !currentAccount) return;
-    
-    if (confirm('ВЫ УВЕРЕНЫ? Это удалит ваш аккаунт и все данные НАВСЕГДА!')) {
-      if (confirm('ПОСЛЕДНЕЕ ПРЕДУПРЕЖДЕНИЕ! Восстановление невозможно. Продолжить?')) {
-        const updatedAccounts = { ...accounts };
-        delete updatedAccounts[currentAccount];
-        localStorage.setItem('aniHub_accounts_v7', JSON.stringify(updatedAccounts));
-        handleLogout();
-        setNotifications(prev => [...prev, {
-          id: Date.now(),
-          type: 'info',
-          message: 'Аккаунт удален. Спасибо за использование AniHub! 👋'
-        }]);
-      }
-    }
-  };
-
-  // Clear old notifications
-  useEffect(() => {
-    if (notifications.length > 0) {
-      const timer = setTimeout(() => {
-        setNotifications(prev => prev.slice(1));
-      }, 5000);
-      return () => clearTimeout(timer);
-    }
-  }, [notifications]);
-
-  // ==================== RENDER ====================
+const Bar = memo(({value,max,grad,h=6,style={}}) => {
+  const pct = Math.min(Math.max((value/Math.max(max,1))*100,0),100);
   return (
-    <div className={`min-h-screen font-sans transition-all duration-1000 ${
-      isDarkMode 
-        ? `bg-gradient-to-br ${theme.bg} text-white` 
-        : 'bg-gradient-to-br from-[#f0f2f5] via-white to-[#e0e7ff] text-slate-900'
-    }`}>
-      
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@300;400;500;600;700&family=Orbitron:wght@400;700;900&family=Audiowide&family=Share+Tech+Mono&family=Righteous&family=Electrolize&family=Quicksand:wght@400;700&family=Poppins:wght@400;600;700;900&display=swap');
-        
-        * { 
-          font-family: ${theme.font};
-          -webkit-tap-highlight-color: transparent;
-        }
-        
-        html { scroll-behavior: smooth; }
-        
-        img { 
-          user-select: none;
-          -webkit-user-drag: none;
-        }
-        
-        @keyframes fadeIn {
-          from { opacity: 0; transform: translateY(20px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-        
-        @keyframes slideIn {
-          from { transform: translateX(-100%); opacity: 0; }
-          to { transform: translateX(0); opacity: 1; }
-        }
-        
-        @keyframes slideInRight {
-          from { transform: translateX(100%); opacity: 0; }
-          to { transform: translateX(0); opacity: 1; }
-        }
-        
-        @keyframes slideDown {
-          from { transform: translateY(-100%); opacity: 0; }
-          to { transform: translateY(0); opacity: 1; }
-        }
-        
-        @keyframes pulse {
-          0%, 100% { transform: scale(1); opacity: 1; }
-          50% { transform: scale(1.05); opacity: 0.8; }
-        }
-        
-        @keyframes glow {
-          0%, 100% { box-shadow: 0 0 20px ${theme.primary}80, 0 0 40px ${theme.primary}40; }
-          50% { box-shadow: 0 0 30px ${theme.primary}ff, 0 0 60px ${theme.primary}80; }
-        }
-        
-        @keyframes float {
-          0%, 100% { transform: translateY(0px); }
-          50% { transform: translateY(-20px); }
-        }
-        
-        @keyframes scroll {
-          0% { transform: translateX(0); }
-          100% { transform: translateX(calc(-350px * 20)); }
-        }
-        
-        @keyframes rotate {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(360deg); }
-        }
-        
-        @keyframes bounce {
-          0%, 100% { transform: translateY(0); }
-          50% { transform: translateY(-10px); }
-        }
+    <div style={{height:h,borderRadius:99,overflow:'hidden',background:'rgba(255,255,255,.1)',width:'100%',...style}}>
+      <div style={{width:`${pct}%`,height:'100%',borderRadius:99,background:grad,transition:'width .7s cubic-bezier(.4,0,.2,1)',position:'relative',overflow:'hidden'}}>
+        <div className="shimmer" style={{position:'absolute',inset:0}}/>
+      </div>
+    </div>
+  );
+});
 
-        @keyframes gradient {
-          0% { background-position: 0% 50%; }
-          50% { background-position: 100% 50%; }
-          100% { background-position: 0% 50%; }
-        }
+const Toggle = memo(({v,onChange,color}) => (
+  <div onClick={()=>onChange(!v)} style={{width:48,height:27,borderRadius:99,position:'relative',cursor:'pointer',flexShrink:0,transition:'all .3s',background:v?`linear-gradient(90deg,${color},${color}bb)`:'rgba(255,255,255,.15)',boxShadow:v?`0 0 16px ${color}55`:''}}>
+    <div style={{position:'absolute',top:3,left:4,width:21,height:21,borderRadius:'50%',background:'white',boxShadow:'0 2px 8px rgba(0,0,0,.4)',transition:'transform .3s cubic-bezier(.34,1.56,.64,1)',transform:`translateX(${v?21:0}px)`}}/>
+  </div>
+));
 
-        @keyframes shimmer {
-          0% { transform: translateX(-100%); }
-          100% { transform: translateX(100%); }
-        }
-        
-        .animate-fade-in { animation: fadeIn 0.5s ease-out forwards; }
-        .animate-slide-in { animation: slideIn 0.4s ease-out forwards; }
-        .animate-slide-in-right { animation: slideInRight 0.4s ease-out forwards; }
-        .animate-slide-down { animation: slideDown 0.4s ease-out forwards; }
-        .animate-pulse-slow { animation: pulse 3s ease-in-out infinite; }
-        .animate-glow { animation: glow 2s ease-in-out infinite; }
-        .animate-float { animation: float 6s ease-in-out infinite; }
-        .animate-rotate { animation: rotate 10s linear infinite; }
-        .animate-bounce-slow { animation: bounce 2s ease-in-out infinite; }
-        .animate-gradient { animation: gradient 5s ease infinite; background-size: 200% 200%; }
-        
-        .animate-infinite-scroll {
-          display: flex;
-          width: max-content;
-          animation: scroll 80s linear infinite;
-          will-change: transform;
-        }
-        
-        .animate-infinite-scroll:hover { animation-play-state: paused; }
-        
-        .glass {
-          backdrop-filter: blur(16px) saturate(180%);
-          -webkit-backdrop-filter: blur(16px) saturate(180%);
-          background: ${isDarkMode ? 'rgba(10, 10, 20, 0.6)' : 'rgba(255, 255, 255, 0.6)'};
-          border: 1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'};
-        }
-        
-        .glass-strong {
-          backdrop-filter: blur(24px) saturate(200%);
-          background: ${isDarkMode ? 'rgba(10, 10, 20, 0.85)' : 'rgba(255, 255, 255, 0.85)'};
-          border: 1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.15)'};
-        }
-        
-        .no-scrollbar::-webkit-scrollbar { display: none; }
-        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-        
-        ::-webkit-scrollbar { width: 8px; height: 8px; }
-        ::-webkit-scrollbar-track { background: ${isDarkMode ? '#0a0a0f' : '#f0f0f0'}; }
-        ::-webkit-scrollbar-thumb {
-          background: linear-gradient(${theme.primary}, ${theme.secondary});
-          border-radius: 10px;
-        }
-        ::-webkit-scrollbar-thumb:hover { background: ${theme.primary}; }
-        
-        .card-hover {
-          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        
-        .card-hover:hover {
-          transform: translateY(-8px) scale(1.02);
-          box-shadow: 0 20px 50px ${theme.primary}50;
-        }
-        
-        .text-gradient {
-          background: linear-gradient(135deg, ${theme.primary}, ${theme.secondary});
-          -webkit-background-clip: text;
-          -webkit-text-fill-color: transparent;
-          background-clip: text;
-        }
-        
-        .neon-text {
-          text-shadow: 0 0 10px ${theme.primary}, 0 0 20px ${theme.primary};
-        }
-        
-        .neon-border {
-          box-shadow: 0 0 15px ${theme.primary}, inset 0 0 15px ${theme.primary};
-        }
+const Score = memo(({n}) => {
+  const x=parseFloat(n);const c=x>=8?'#22c55e':x>=6?'#eab308':x>=4?'#f97316':'#ef4444';
+  return <span style={{display:'inline-flex',alignItems:'center',gap:2,borderRadius:8,padding:'1px 7px',fontSize:11,fontWeight:900,background:`${c}22`,color:c,border:`1px solid ${c}44`,flexShrink:0}}>★{n}</span>;
+});
 
-        .shimmer-overlay {
-          position: absolute;
-          top: -50%;
-          left: -50%;
-          right: -50%;
-          bottom: -50%;
-          background: linear-gradient(90deg, transparent, ${theme.primary}20, transparent);
-          animation: shimmer 2s infinite;
-        }
-        
-        @media (max-width: 768px) {
-          .glass { backdrop-filter: blur(12px); }
-          .glass-strong { backdrop-filter: blur(20px); }
-        }
+const StatusDot = memo(({status}) => {
+  const m={watching:{l:'Смотрю',c:'#60a5fa'},planned:{l:'В планах',c:'#f59e0b'},completed:{l:'Завершено',c:'#22c55e'}};
+  const x=m[status]; if(!x) return null;
+  return <span style={{display:'inline-block',borderRadius:7,padding:'2px 7px',fontSize:10,fontWeight:900,background:`${x.c}dd`,color:'#000',letterSpacing:'.02em'}}>{x.l}</span>;
+});
 
-        @media (prefers-reduced-motion: reduce) {
-          *, *::before, *::after {
-            animation-duration: 0.01ms !important;
-            animation-iteration-count: 1 !important;
-            transition-duration: 0.01ms !important;
-          }
-        }
-      `}</style>
+const SkeletonCard = memo(() => (
+  <div style={{borderRadius:16,overflow:'hidden',aspectRatio:'2/3',background:'#0b1628',position:'relative'}}>
+    <div className="shimmer" style={{position:'absolute',inset:0}}/>
+  </div>
+));
 
-      {/* Notifications */}
-      <div className="fixed top-20 right-4 z-[10001] space-y-2 max-w-sm">
-        {notifications.map((notif, idx) => (
-          <div
-            key={notif.id}
-            className="animate-slide-in-right glass-strong p-4 rounded-xl border-2 shadow-2xl"
-            style={{
-              borderColor: notif.type === 'error' ? '#ef4444' : notif.type === 'warning' ? '#f59e0b' : notif.type === 'success' ? '#10b981' : theme.primary,
-              animationDelay: `${idx * 0.1}s`
-            }}
-          >
-            <div className="flex items-center gap-3">
-              <span className="text-2xl">
-                {notif.type === 'error' ? '❌' : notif.type === 'warning' ? '⚠️' : notif.type === 'success' ? '✅' : 'ℹ️'}
-              </span>
-              <p className="text-sm font-bold">{notif.message}</p>
+/* ═══════════════════════════════════════════════════════════════
+   TOAST STACK
+═══════════════════════════════════════════════════════════════ */
+const Toasts = memo(({items}) => {
+  const cfg={success:{i:'✓',c:'#22c55e'},error:{i:'✕',c:'#ef4444'},warning:{i:'!',c:'#f59e0b'},info:{i:'ℹ',c:'#60a5fa'}};
+  return (
+    <div style={{position:'fixed',top:66,right:14,zIndex:12000,display:'flex',flexDirection:'column',gap:8,width:'min(300px,calc(100vw - 28px))',pointerEvents:'none'}}>
+      {items.map(t=>{
+        const{i,c}=cfg[t.type]??cfg.info;
+        return (
+          <div key={t.id} className="glass-dark" style={{borderRadius:16,overflow:'hidden',animation:'toastIn .3s cubic-bezier(.34,1.2,.64,1) both',pointerEvents:'auto',borderLeft:`3px solid ${c}`}}>
+            <div style={{display:'flex',alignItems:'center',gap:10,padding:'11px 14px'}}>
+              <div style={{width:26,height:26,borderRadius:8,display:'flex',alignItems:'center',justifyContent:'center',background:`${c}22`,color:c,fontSize:12,fontWeight:900,flexShrink:0}}>{i}</div>
+              <p style={{fontSize:13,fontWeight:700,color:'rgba(255,255,255,.92)',lineHeight:1.35}}>{t.msg}</p>
             </div>
+            <div style={{height:2,background:c,animation:'barFill 3.6s linear forwards',animationDirection:'reverse'}}/>
           </div>
-        ))}
+        );
+      })}
+    </div>
+  );
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   DESCRIPTION TOOLTIP (desktop hover)
+═══════════════════════════════════════════════════════════════ */
+const DescTooltip = memo(({item,p,s,side='right'}) => {
+  const desc = item?.desc_text||stripHtml(item?.description)||'';
+  return (
+    <div style={{position:'absolute',top:0,[side==='right'?'left':'right']:'calc(100% + 10px)',zIndex:600,width:280,animation:'overlayIn .22s ease both',pointerEvents:'none'}}>
+      <div className="glass-dark" style={{borderRadius:18,padding:14,boxShadow:`0 20px 60px rgba(0,0,0,.75),0 0 0 1px ${p}22`,border:`1px solid ${p}33`}}>
+        <p style={{fontSize:13,fontWeight:800,color:'#fff',lineHeight:1.3,marginBottom:7}}>{item?.russian||item?.name}</p>
+        <div style={{display:'flex',flexWrap:'wrap',gap:4,marginBottom:8}}>
+          {item?.score&&<Score n={item.score}/>}
+          {item?.kind&&<span style={{fontSize:10,fontWeight:800,padding:'2px 7px',borderRadius:6,background:`${p}22`,color:p}}>{item.kind.toUpperCase()}</span>}
+          {item?.aired_on&&<span style={{fontSize:10,fontWeight:700,padding:'2px 7px',borderRadius:6,background:'rgba(255,255,255,.08)',color:'rgba(255,255,255,.45)'}}>{item.aired_on.slice(0,4)}</span>}
+          {item?.episodes&&<span style={{fontSize:10,fontWeight:700,padding:'2px 7px',borderRadius:6,background:'rgba(255,255,255,.08)',color:'rgba(255,255,255,.45)'}}>{item.episodes} эп.</span>}
+        </div>
+        {desc&&<p style={{fontSize:11,lineHeight:1.65,color:'rgba(255,255,255,.55)',display:'-webkit-box',WebkitLineClamp:5,WebkitBoxOrient:'vertical',overflow:'hidden'}}>{desc}</p>}
+        {item?.genres?.length>0&&(
+          <div style={{display:'flex',flexWrap:'wrap',gap:4,marginTop:8}}>
+            {item.genres.slice(0,4).map(g=>(
+              <span key={g.id} style={{fontSize:10,fontWeight:700,padding:'2px 8px',borderRadius:20,background:`${p}15`,color:`${p}cc`,border:`1px solid ${p}30`}}>{g.russian||g.name}</span>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   ANIME CARD (grid mode) — with poster + hover tooltip
+═══════════════════════════════════════════════════════════════ */
+const AnimeCard = memo(({item,onClick,onFav,faved,status,userRating,themeP,themeS,cache,colIdx=0,cols=5}) => {
+  const [loaded,setLoaded] = useState(false);
+  const [hover, setHover]  = useState(false);
+  const timer = useRef(null);
+  const src   = imgSrc(item);
+  const rich  = cache?.[item?.id]?{...item,...cache[item.id]}:item;
+  const side  = colIdx>=cols-2?'left':'right';
+
+  const onEnter=()=>{ timer.current=setTimeout(()=>setHover(true),480); };
+  const onLeave=()=>{ clearTimeout(timer.current); setHover(false); };
+
+  return (
+    <article className="card-h" onClick={()=>onClick(item)} onMouseEnter={onEnter} onMouseLeave={onLeave}
+      style={{cursor:'pointer',userSelect:'none',position:'relative',zIndex:hover?20:1,borderRadius:16}}>
+      {/* Poster image */}
+      <div style={{borderRadius:16,overflow:'hidden',aspectRatio:'2/3',background:'linear-gradient(135deg,#0b1628,#152040)',position:'relative'}}>
+        {!loaded&&<div className="shimmer" style={{position:'absolute',inset:0,zIndex:1}}/>}
+        {src&&<img src={src} alt={item.russian||item.name} loading="lazy" onLoad={()=>setLoaded(true)}
+          style={{width:'100%',height:'100%',objectFit:'cover',opacity:loaded?1:0,transition:'opacity .5s ease',animation:loaded?'posterIn .5s ease both':''}}/>}
+        {/* Gradient overlay */}
+        <div style={{position:'absolute',inset:0,background:'linear-gradient(to top,rgba(0,0,0,.95) 0%,rgba(0,0,0,.3) 45%,transparent 72%)'}}/>
+        {/* Hover overlay */}
+        <div className="card-overlay" style={{position:'absolute',inset:0,background:`linear-gradient(to top,${themeP}33,transparent)`,opacity:0,transition:'opacity .3s ease'}}/>
+        {/* Top badges */}
+        <div style={{position:'absolute',top:7,left:7,right:7,display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:4}}>
+          {status&&<StatusDot status={status}/>}
+          {userRating&&<span style={{marginLeft:'auto',background:'rgba(234,179,8,.95)',color:'#000',borderRadius:7,padding:'2px 7px',fontSize:10,fontWeight:900,boxShadow:'0 2px 8px rgba(0,0,0,.4)'}}>★{userRating}</span>}
+        </div>
+        {/* Bottom info */}
+        <div style={{position:'absolute',bottom:0,left:0,right:0,padding:'10px 9px 10px'}}>
+          {item.score&&<Score n={item.score}/>}
+          <p className="lc2" style={{marginTop:4,fontSize:11,fontWeight:800,color:'white',lineHeight:1.3}}>{item.russian||item.name}</p>
+          {item.aired_on&&<p style={{marginTop:2,fontSize:9,fontWeight:700,color:'rgba(255,255,255,.38)'}}>{item.aired_on.slice(0,4)}{item.episodes?` · ${item.episodes}эп`:''}</p>}
+        </div>
+        {/* Fav button */}
+        <button onClick={e=>{e.stopPropagation();onFav(item);}}
+          style={{position:'absolute',bottom:8,right:8,width:30,height:30,borderRadius:10,border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,background:faved?'#ec489999':'rgba(0,0,0,.55)',backdropFilter:'blur(8px)',transition:'all .2s',color:faved?'#fff':'rgba(255,255,255,.5)',zIndex:2,animation:faved?'heartPop .3s ease':''}}>
+          {faved?'♥':'♡'}
+        </button>
+        {/* Fav glow border */}
+        {faved&&<div style={{position:'absolute',inset:0,borderRadius:'inherit',boxShadow:'inset 0 0 0 2px #ec489966'}}/>}
+      </div>
+      {/* Desktop hover tooltip */}
+      {hover&&<DescTooltip item={rich} p={themeP} s={themeS} side={side}/>}
+    </article>
+  );
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   ANIME ROW (list mode) — with expandable description
+═══════════════════════════════════════════════════════════════ */
+const AnimeRow = memo(({item,onClick,onFav,faved,themeP,themeS,cache}) => {
+  const [expanded,setExpanded] = useState(false);
+  const src    = imgSrc(item);
+  const rich   = cache?.[item?.id]?{...item,...cache[item.id]}:item;
+  const desc   = rich?.desc_text||stripHtml(rich?.description)||'';
+
+  return (
+    <div className="card" style={{borderRadius:16,overflow:'hidden',transition:'background .2s'}}>
+      <div onClick={()=>onClick(item)} style={{display:'flex',gap:12,padding:'11px 12px',cursor:'pointer',transition:'background .2s',position:'relative'}}
+        onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,.06)'}
+        onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+        {/* Poster */}
+        <div style={{width:52,flexShrink:0,borderRadius:10,overflow:'hidden',aspectRatio:'2/3',background:'#0b1628',position:'relative'}}>
+          {src&&<img src={src} alt="" loading="lazy" style={{width:'100%',height:'100%',objectFit:'cover'}}/>}
+        </div>
+        <div style={{flex:1,minWidth:0,display:'flex',flexDirection:'column',justifyContent:'center',gap:5}}>
+          <p className="lc2" style={{fontSize:13,fontWeight:800,color:'white',lineHeight:1.3}}>{item.russian||item.name}</p>
+          <div style={{display:'flex',flexWrap:'wrap',gap:4}}>
+            {item.score&&<Score n={item.score}/>}
+            {item.kind&&<span style={{fontSize:10,fontWeight:700,padding:'2px 7px',borderRadius:6,background:'rgba(255,255,255,.08)',color:'rgba(255,255,255,.4)'}}>{item.kind}</span>}
+            {item.aired_on&&<span style={{fontSize:10,fontWeight:700,padding:'2px 7px',borderRadius:6,background:'rgba(255,255,255,.08)',color:'rgba(255,255,255,.35)'}}>{item.aired_on.slice(0,4)}</span>}
+          </div>
+          {desc&&!expanded&&<p className="lc2" style={{fontSize:11,lineHeight:1.55,color:'rgba(255,255,255,.32)',fontWeight:500}}>{desc}</p>}
+        </div>
+        <div style={{display:'flex',flexDirection:'column',gap:6,alignItems:'center',flexShrink:0}}>
+          <button onClick={e=>{e.stopPropagation();onFav(item);}}
+            style={{width:34,height:34,borderRadius:10,border:'none',cursor:'pointer',background:faved?'#ec489922':'rgba(255,255,255,.06)',color:faved?'#ec4899':'rgba(255,255,255,.3)',fontSize:15,transition:'all .2s',display:'flex',alignItems:'center',justifyContent:'center'}}>
+            {faved?'♥':'♡'}
+          </button>
+          {desc&&<button onClick={e=>{e.stopPropagation();setExpanded(x=>!x);}}
+            style={{width:34,height:34,borderRadius:10,border:'none',cursor:'pointer',background:expanded?`${themeP}22`:'rgba(255,255,255,.06)',color:expanded?themeP:'rgba(255,255,255,.3)',fontSize:10,fontWeight:900,transition:'all .2s',display:'flex',alignItems:'center',justifyContent:'center',transform:expanded?'rotate(180deg)':'none'}}>▼</button>}
+        </div>
+      </div>
+      {expanded&&desc&&(
+        <div className="desc-expand" style={{padding:'0 12px 12px'}}>
+          <div style={{padding:12,borderRadius:12,background:'rgba(255,255,255,.04)',border:`1px solid ${themeP}22`}}>
+            {rich?.genres?.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:4,marginBottom:8}}>
+              {rich.genres.slice(0,6).map(g=><span key={g.id} style={{fontSize:10,fontWeight:700,padding:'2px 8px',borderRadius:20,background:`${themeP}18`,color:`${themeP}cc`,border:`1px solid ${themeP}33`}}>{g.russian||g.name}</span>)}
+            </div>}
+            <p style={{fontSize:12,lineHeight:1.68,color:'rgba(255,255,255,.6)'}}>{desc}</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   TRENDING FULL PAGE (infinite scroll "load more")
+═══════════════════════════════════════════════════════════════ */
+const TrendingPage = memo(({themeP,themeS,onOpen,onFav,favIds,cache,library}) => {
+  const [items, setItems]   = useState([]);
+  const [page,  setPage]    = useState(1);
+  const [more,  setMore]    = useState(true);
+  const [loading,setLoading]= useState(true);
+  const [loadingMore,setLM] = useState(false);
+  const grad = `linear-gradient(135deg,${themeP},${themeS})`;
+
+  const fetchPage = useCallback(async (pg, append=false) => {
+    try {
+      const r = await fetch(`${API}/animes?limit=${TREND_PER}&page=${pg}&order=popularity`);
+      const d = await r.json();
+      const arr = Array.isArray(d)?d:[];
+      if(append) setItems(prev=>[...prev,...arr]);
+      else setItems(arr);
+      if(arr.length<TREND_PER) setMore(false);
+    } catch {}
+    setLoading(false); setLM(false);
+  },[]);
+
+  useEffect(()=>{ setLoading(true); fetchPage(1,false); },[fetchPage]);
+
+  const loadMore = () => {
+    if(loadingMore||!more) return;
+    setLM(true);
+    const next = page+1;
+    setPage(next);
+    fetchPage(next,true);
+  };
+
+  return (
+    <div className="fu">
+      {/* Hero banner */}
+      <div style={{borderRadius:22,overflow:'hidden',position:'relative',marginBottom:20,background:`linear-gradient(135deg,${themeP}22,${themeS}11)`,border:`1px solid ${themeP}33`,padding:'22px 20px'}}>
+        <div style={{position:'absolute',top:-60,right:-60,width:220,height:220,borderRadius:'50%',background:`${themeP}0a`,pointerEvents:'none'}}/>
+        <div style={{display:'flex',alignItems:'center',gap:14,position:'relative'}}>
+          <div style={{width:58,height:58,borderRadius:18,background:grad,display:'flex',alignItems:'center',justifyContent:'center',fontSize:26,boxShadow:`0 8px 28px ${themeP}55`,flexShrink:0,animation:'glow 3s ease infinite'}}>📈</div>
+          <div>
+            <h2 style={{margin:'0 0 4px',fontSize:22,fontWeight:900}}>В тренде</h2>
+            <p style={{margin:0,fontSize:12,color:'rgba(255,255,255,.45)',fontWeight:600}}>Самые популярные аниме прямо сейчас · {items.length} показано</p>
+          </div>
+        </div>
       </div>
 
-      {/* Daily Goal Progress */}
-      {isLoggedIn && (
-        <div className="fixed bottom-4 left-4 z-[1000] glass-strong p-4 rounded-2xl border border-white/10 w-64 animate-slide-in">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-xs font-black uppercase opacity-70">Дневная цель</p>
-            <span className="text-xs font-black" style={{ color: theme.primary }}>
-              {dailyProgress}/{dailyGoal}
-            </span>
+      {loading ? (
+        <div className="trend-grid stagger">
+          {Array(TREND_PER).fill(0).map((_,i)=><SkeletonCard key={i}/>)}
+        </div>
+      ) : (
+        <>
+          <div className="trend-grid stagger">
+            {items.map((item,idx)=>(
+              <div key={`tr-${item.id}-${idx}`} style={{animation:`trendIn .35s ${Math.min(idx*.025,.4)}s both`}}>
+                <AnimeCard item={item} onClick={onOpen} onFav={onFav}
+                  faved={favIds.has(item.id)} status={library[item.id]?.status}
+                  themeP={themeP} themeS={themeS} cache={cache}
+                  colIdx={idx%5} cols={5}/>
+                {/* Rank badge */}
+                <div style={{marginTop:5,display:'flex',alignItems:'center',gap:4}}>
+                  <span style={{fontSize:11,fontWeight:900,color:idx<3?themeP:'rgba(255,255,255,.3)'}}>#{idx+1}</span>
+                  {idx<3&&<div style={{flex:1,height:2,borderRadius:99,background:grad,opacity:.4}}/>}
+                </div>
+              </div>
+            ))}
           </div>
-          <div className="h-2 bg-black/30 rounded-full overflow-hidden">
-            <div
-              className="h-full transition-all duration-500 rounded-full"
-              style={{
-                width: `${Math.min((dailyProgress / dailyGoal) * 100, 100)}%`,
-                background: `linear-gradient(90deg, ${theme.primary}, ${theme.secondary})`
-              }}
-            />
+          {/* Load more */}
+          {more&&(
+            <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:10,marginTop:28,padding:'0 0 16px'}}>
+              {loadingMore?(
+                <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:8}}>
+                  <Spinner size={28} color={themeP}/>
+                  <p style={{fontSize:12,color:'rgba(255,255,255,.35)',fontWeight:700}}>Загружаем ещё…</p>
+                </div>
+              ):(
+                <button onClick={loadMore} className="btn-primary" style={{padding:'13px 36px',borderRadius:14,fontSize:14,boxShadow:`0 8px 28px ${themeP}44`,display:'flex',alignItems:'center',gap:8}}>
+                  <span>Загрузить ещё</span><span style={{fontSize:18}}>↓</span>
+                </button>
+              )}
+              <p style={{fontSize:11,color:'rgba(255,255,255,.22)',fontWeight:600}}>Страница {page} · {items.length} аниме загружено</p>
+            </div>
+          )}
+          {!more&&items.length>0&&(
+            <div style={{textAlign:'center',padding:'24px 0 16px',color:'rgba(255,255,255,.22)',fontSize:12,fontWeight:700}}>
+              ✓ Всё загружено · {items.length} аниме
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   MOBILE SEARCH OVERLAY — full screen, touch-optimized
+═══════════════════════════════════════════════════════════════ */
+const SearchOverlay = memo(({onClose,themeP,themeS,onOpen,history,onClearHist}) => {
+  const [q,setQ]         = useState('');
+  const [res,setRes]     = useState([]);
+  const [loading,setLd]  = useState(false);
+  const [tab,setTab]     = useState('search'); // search | history | trending
+  const [topItems,setTop]= useState([]);
+  const inputRef = useRef(null);
+  const debRef   = useRef(null);
+
+  useEffect(()=>{ inputRef.current?.focus(); },[]);
+
+  // Fetch top for trending tab
+  useEffect(()=>{
+    fetch(`${API}/animes?limit=12&order=popularity`).then(r=>r.json()).then(d=>setTop(Array.isArray(d)?d:[])).catch(()=>{});
+  },[]);
+
+  useEffect(()=>{
+    if(!q.trim()){ setRes([]); return; }
+    setLd(true);
+    clearTimeout(debRef.current);
+    debRef.current=setTimeout(async()=>{
+      try{
+        const r=await fetch(`${API}/animes?search=${encodeURIComponent(q)}&limit=12&order=popularity`);
+        setRes(Array.isArray(await r.json())?await fetch(`${API}/animes?search=${encodeURIComponent(q)}&limit=12&order=popularity`).then(x=>x.json()):[]);
+      }catch{}
+      setLd(false);
+    },380);
+  },[q]);
+
+  // fix double fetch
+  useEffect(()=>{
+    if(!q.trim()){ setRes([]); return; }
+    setLd(true);
+    clearTimeout(debRef.current);
+    debRef.current=setTimeout(async()=>{
+      try{
+        const r=await fetch(`${API}/animes?search=${encodeURIComponent(q)}&limit=14&order=popularity`);
+        const d=await r.json();
+        setRes(Array.isArray(d)?d:[]);
+      }catch{}
+      setLd(false);
+    },400);
+  },[q]);
+
+  const displayList = q.trim()?res:(tab==='trending'?topItems:[]);
+  const grad=`linear-gradient(135deg,${themeP},${themeS})`;
+
+  return (
+    <div className="fi" style={{position:'fixed',inset:0,zIndex:11000,background:`${THEMES.ocean?.b??'#020c14'}`,display:'flex',flexDirection:'column',backgroundColor:'var(--base)'}}>
+      {/* Header */}
+      <div style={{padding:'10px 14px 0',flexShrink:0}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,padding:'0 0 10px'}}>
+          <button onClick={onClose} style={{width:38,height:38,borderRadius:12,border:'none',background:'rgba(255,255,255,.09)',cursor:'pointer',fontSize:18,display:'flex',alignItems:'center',justifyContent:'center',color:'white',flexShrink:0}}>←</button>
+          <div style={{flex:1,position:'relative'}}>
+            <input ref={inputRef} value={q} onChange={e=>setQ(e.target.value)} placeholder="Поиск аниме, манги..." autoComplete="off" autoCorrect="off" spellCheck={false}
+              className="input" style={{width:'100%',padding:'11px 42px 11px 14px',borderRadius:14,fontSize:15,fontWeight:600}}
+              onKeyDown={e=>e.key==='Escape'&&onClose()}/>
+            {loading&&<div style={{position:'absolute',right:12,top:'50%',transform:'translateY(-50%)'}}><Spinner size={16} color={themeP}/></div>}
+            {q&&!loading&&<button onClick={()=>setQ('')} style={{position:'absolute',right:12,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:'rgba(255,255,255,.4)',fontSize:16,padding:0}}>✕</button>}
           </div>
-          {dailyProgress >= dailyGoal && (
-            <p className="text-xs text-center mt-2 font-bold" style={{ color: theme.secondary }}>
-              🎉 Цель достигнута!
-            </p>
+        </div>
+        {/* Tabs */}
+        {!q&&<div style={{display:'flex',gap:6,paddingBottom:10}}>
+          {[['search','🔍 Поиск'],['history','⏱ История'],['trending','📈 Популярное']].map(([k,l])=>(
+            <button key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'8px 0',borderRadius:12,border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:12,fontWeight:800,transition:'all .2s',background:tab===k?grad:'rgba(255,255,255,.07)',color:tab===k?'white':'rgba(255,255,255,.4)',boxShadow:tab===k?`0 4px 14px ${themeP}44`:''}}>
+              {l}
+            </button>
+          ))}
+        </div>}
+      </div>
+
+      {/* Body */}
+      <div className="ns" style={{flex:1,overflowY:'auto',padding:'0 14px 24px'}}>
+        {/* History tab */}
+        {!q&&tab==='history'&&(
+          <div className="fu">
+            {history?.length>0?(
+              <>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+                  <p style={{fontSize:11,fontWeight:800,opacity:.35,textTransform:'uppercase',letterSpacing:'.08em'}}>Недавние запросы</p>
+                  <button onClick={onClearHist} style={{background:'none',border:'none',color:themeP,fontSize:12,fontWeight:700,cursor:'pointer',fontFamily:'inherit',opacity:.7}}>Очистить</button>
+                </div>
+                {history.slice(0,10).map((h,i)=>(
+                  <div key={i} onClick={()=>setQ(h)} style={{display:'flex',alignItems:'center',gap:10,padding:'11px 12px',borderRadius:14,cursor:'pointer',transition:'background .15s',animation:`fadeUp .28s ${i*.04}s both`}}
+                    onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,.07)'}
+                    onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                    <span style={{fontSize:16,opacity:.4}}>⏱</span>
+                    <span style={{fontSize:14,fontWeight:600,color:'rgba(255,255,255,.7)'}}>{h}</span>
+                    <span style={{marginLeft:'auto',fontSize:14,opacity:.2}}>↗</span>
+                  </div>
+                ))}
+              </>
+            ):(
+              <div style={{textAlign:'center',padding:'48px 20px',color:'rgba(255,255,255,.2)'}}>
+                <div style={{fontSize:48,marginBottom:12,animation:'float 3s ease infinite'}}>⏱</div>
+                <p style={{fontSize:14,fontWeight:700}}>История поиска пуста</p>
+              </div>
+            )}
+          </div>
+        )}
+        {/* Empty search tab */}
+        {!q&&tab==='search'&&(
+          <div style={{textAlign:'center',padding:'52px 20px'}}>
+            <div style={{fontSize:52,marginBottom:14,animation:'float 3s ease infinite'}}>🔍</div>
+            <p style={{fontSize:16,fontWeight:800,marginBottom:6}}>Начните вводить</p>
+            <p style={{fontSize:13,color:'rgba(255,255,255,.3)',fontWeight:600}}>Поиск по названию, жанру, году…</p>
+          </div>
+        )}
+        {/* Trending tab */}
+        {!q&&tab==='trending'&&(
+          <div>
+            <p style={{fontSize:11,fontWeight:800,opacity:.35,textTransform:'uppercase',letterSpacing:'.08em',marginBottom:12}}>Популярное сейчас</p>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:8}}>
+              {topItems.slice(0,12).map((item,i)=>(
+                <div key={item.id} onClick={()=>{onOpen(item);onClose();}} className="card-h"
+                  style={{borderRadius:14,overflow:'hidden',cursor:'pointer',position:'relative',aspectRatio:'16/9',background:'#0b1628',animation:`fadeUp .3s ${i*.03}s both`}}>
+                  {imgSrc(item)&&<img src={imgSrc(item)} alt="" style={{width:'100%',height:'100%',objectFit:'cover',display:'block'}}/>}
+                  <div style={{position:'absolute',inset:0,background:'linear-gradient(to top,rgba(0,0,0,.9) 0%,transparent 60%)'}}/>
+                  <div style={{position:'absolute',bottom:0,left:0,right:0,padding:'8px 9px'}}>
+                    <p className="lc1" style={{fontSize:11,fontWeight:800,color:'white'}}>{item.russian||item.name}</p>
+                    <div style={{display:'flex',alignItems:'center',gap:4,marginTop:2}}>
+                      <span style={{fontSize:9,fontWeight:900,color:'#fbbf24'}}>★{item.score}</span>
+                      <span style={{fontSize:9,color:'rgba(255,255,255,.3)',fontWeight:700}}>#{i+1}</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {/* Search results */}
+        {q&&(
+          loading&&res.length===0?(
+            <div style={{display:'flex',flexDirection:'column',alignItems:'center',padding:'48px 0',gap:12}}>
+              <Spinner size={28} color={themeP}/><p style={{fontSize:13,fontWeight:700,opacity:.4}}>Ищем…</p>
+            </div>
+          ):res.length===0?(
+            <div style={{textAlign:'center',padding:'52px 20px',color:'rgba(255,255,255,.25)'}}>
+              <div style={{fontSize:48,marginBottom:12,animation:'float 3s ease infinite'}}>📭</div>
+              <p style={{fontSize:15,fontWeight:800}}>Ничего не нашли</p>
+              <p style={{fontSize:12,marginTop:6}}>Попробуйте другой запрос</p>
+            </div>
+          ):(
+            <div style={{display:'flex',flexDirection:'column',gap:8}}>
+              <p style={{fontSize:11,fontWeight:800,opacity:.3,textTransform:'uppercase',letterSpacing:'.07em',marginBottom:4}}>Результаты: {res.length}</p>
+              {res.map((item,i)=>{
+                const src2=imgSrc(item);
+                return (
+                  <div key={item.id} onClick={()=>{onOpen(item);onClose();}}
+                    style={{display:'flex',gap:12,padding:'10px 11px',borderRadius:14,cursor:'pointer',transition:'background .15s',border:'1px solid rgba(255,255,255,.07)',background:'rgba(255,255,255,.03)',animation:`fadeUp .28s ${i*.03}s both`}}
+                    onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,.08)'}
+                    onMouseLeave={e=>e.currentTarget.style.background='rgba(255,255,255,.03)'}>
+                    <div style={{width:46,height:64,borderRadius:10,overflow:'hidden',background:'#0b1628',flexShrink:0}}>
+                      {src2&&<img src={src2} alt="" style={{width:'100%',height:'100%',objectFit:'cover',display:'block'}}/>}
+                    </div>
+                    <div style={{flex:1,minWidth:0,display:'flex',flexDirection:'column',justifyContent:'center',gap:5}}>
+                      <p className="lc2" style={{fontSize:14,fontWeight:800,color:'white',lineHeight:1.3}}>{item.russian||item.name}</p>
+                      <div style={{display:'flex',flexWrap:'wrap',gap:4}}>
+                        {item.score&&<Score n={item.score}/>}
+                        {item.kind&&<span style={{fontSize:10,fontWeight:700,padding:'1px 7px',borderRadius:6,background:'rgba(255,255,255,.09)',color:'rgba(255,255,255,.4)'}}>{item.kind}</span>}
+                        {item.aired_on&&<span style={{fontSize:10,fontWeight:700,padding:'1px 7px',borderRadius:6,background:'rgba(255,255,255,.09)',color:'rgba(255,255,255,.35)'}}>{item.aired_on.slice(0,4)}</span>}
+                      </div>
+                    </div>
+                    <span style={{fontSize:18,opacity:.2,alignSelf:'center'}}>→</span>
+                  </div>
+                );
+              })}
+            </div>
+          )
+        )}
+      </div>
+    </div>
+  );
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   SPOTLIGHT SEARCH (desktop Ctrl+K)
+═══════════════════════════════════════════════════════════════ */
+const Spotlight = memo(({onClose,themeP,themeS,onOpen,history,onClearHist}) => {
+  const [q,setQ]       = useState('');
+  const [res,setRes]   = useState([]);
+  const [ld,setLd]     = useState(false);
+  const inputRef = useRef(null);
+  const debRef   = useRef(null);
+
+  useEffect(()=>{ inputRef.current?.focus(); },[]);
+
+  useEffect(()=>{
+    if(!q.trim()){ setRes([]); return; }
+    setLd(true);
+    clearTimeout(debRef.current);
+    debRef.current=setTimeout(async()=>{
+      try{
+        const r=await fetch(`${API}/animes?search=${encodeURIComponent(q)}&limit=10&order=popularity`);
+        const d=await r.json(); setRes(Array.isArray(d)?d:[]);
+      }catch{}
+      setLd(false);
+    },360);
+  },[q]);
+
+  return (
+    <div className="fi" style={{position:'fixed',inset:0,zIndex:12000,display:'flex',alignItems:'flex-start',justifyContent:'center',padding:'80px 16px 16px',background:'rgba(0,0,0,.82)',backdropFilter:'blur(20px)'}}>
+      <div onClick={onClose} style={{position:'absolute',inset:0}}/>
+      <div className="glass-dark si" style={{position:'relative',width:'100%',maxWidth:580,borderRadius:22,overflow:'hidden',boxShadow:`0 30px 80px rgba(0,0,0,.8),0 0 0 1px ${themeP}33`}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,padding:'14px 16px',borderBottom:'1px solid rgba(255,255,255,.08)'}}>
+          <span style={{fontSize:17,opacity:.35}}>🔍</span>
+          <input ref={inputRef} value={q} onChange={e=>setQ(e.target.value)} placeholder="Поиск аниме…"
+            style={{flex:1,background:'transparent',border:'none',outline:'none',fontSize:16,fontWeight:600,color:'white',fontFamily:'inherit'}}
+            onKeyDown={e=>e.key==='Escape'&&onClose()}/>
+          {ld&&<Spinner size={16} color={themeP}/>}
+          <kbd style={{fontSize:11,fontWeight:700,padding:'3px 7px',borderRadius:7,background:'rgba(255,255,255,.09)',color:'rgba(255,255,255,.35)',border:'1px solid rgba(255,255,255,.13)',flexShrink:0}}>ESC</kbd>
+        </div>
+        <div className="ns" style={{maxHeight:400,overflowY:'auto'}}>
+          {res.length>0?res.map(item=>(
+            <div key={item.id} onClick={()=>{onOpen(item);onClose();}}
+              style={{display:'flex',gap:11,padding:'9px 16px',cursor:'pointer',transition:'background .12s',alignItems:'center'}}
+              onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,.07)'}
+              onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+              <div style={{width:36,height:52,borderRadius:8,overflow:'hidden',background:'#0b1628',flexShrink:0}}>
+                {imgSrc(item)&&<img src={imgSrc(item)} alt="" style={{width:'100%',height:'100%',objectFit:'cover',display:'block'}}/>}
+              </div>
+              <div style={{flex:1,minWidth:0}}>
+                <p className="lc1" style={{fontSize:13,fontWeight:800,color:'white',marginBottom:4}}>{item.russian||item.name}</p>
+                <div style={{display:'flex',gap:5}}>
+                  {item.score&&<Score n={item.score}/>}
+                  {item.kind&&<span style={{fontSize:10,fontWeight:700,padding:'1px 6px',borderRadius:5,background:'rgba(255,255,255,.08)',color:'rgba(255,255,255,.4)'}}>{item.kind}</span>}
+                </div>
+              </div>
+              <span style={{opacity:.22}}>→</span>
+            </div>
+          )):q&&!ld?(
+            <div style={{padding:'36px',textAlign:'center',color:'rgba(255,255,255,.25)'}}>
+              <p style={{fontSize:14,fontWeight:700}}>Ничего не найдено</p>
+            </div>
+          ):history?.length>0?(
+            <div style={{padding:'10px 16px'}}>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
+                <span style={{fontSize:11,fontWeight:800,opacity:.3,textTransform:'uppercase',letterSpacing:'.07em'}}>Недавние</span>
+                <button onClick={onClearHist} style={{background:'none',border:'none',color:themeP,fontSize:11,fontWeight:700,cursor:'pointer',fontFamily:'inherit',opacity:.7}}>Очистить</button>
+              </div>
+              {history.slice(0,5).map((h,i)=>(
+                <div key={i} onClick={()=>setQ(h)} style={{padding:'8px 10px',borderRadius:10,cursor:'pointer',fontSize:13,fontWeight:600,color:'rgba(255,255,255,.55)',transition:'all .15s',display:'flex',alignItems:'center',gap:8}}
+                  onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,.07)'}
+                  onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                  <span style={{opacity:.35}}>⏱</span>{h}
+                </div>
+              ))}
+            </div>
+          ):null}
+        </div>
+        <div style={{padding:'10px 16px',borderTop:'1px solid rgba(255,255,255,.07)',display:'flex',gap:14}}>
+          {[['↵','Открыть'],['ESC','Закрыть'],['Ctrl+K','Поиск']].map(([k,l])=>(
+            <div key={k} style={{display:'flex',alignItems:'center',gap:5}}>
+              <kbd style={{fontSize:10,fontWeight:700,padding:'2px 6px',borderRadius:5,background:'rgba(255,255,255,.07)',color:'rgba(255,255,255,.3)',border:'1px solid rgba(255,255,255,.1)'}}>{k}</kbd>
+              <span style={{fontSize:10,color:'rgba(255,255,255,.22)',fontWeight:600}}>{l}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   FILTER PANEL
+═══════════════════════════════════════════════════════════════ */
+const FilterPanel = memo(({filters,onChange,themeP,themeS,onClose}) => {
+  const [loc,setLoc] = useState(filters);
+  const apply=()=>{ onChange(loc); onClose(); };
+  const reset=()=>{ const d={year:null,scoreMin:0,kind:'',status:''}; setLoc(d); onChange(d); onClose(); };
+  const kinds=[{v:'',l:'Все'},{v:'tv',l:'TV'},{v:'movie',l:'Фильм'},{v:'ova',l:'OVA'},{v:'ona',l:'ONA'},{v:'special',l:'Спешл'}];
+  const statuses=[{v:'',l:'Все'},{v:'released',l:'Вышло'},{v:'ongoing',l:'Онгоинг'},{v:'anons',l:'Анонс'}];
+
+  return (
+    <div className="fi" style={{position:'fixed',inset:0,zIndex:11000,display:'flex',alignItems:'flex-end',justifyContent:'center',background:'rgba(0,0,0,.75)',backdropFilter:'blur(14px)'}}>
+      <div onClick={onClose} style={{position:'absolute',inset:0}}/>
+      <div className="glass-dark su prof-sheet" style={{position:'relative',borderRadius:'24px 24px 0 0',width:'100%',maxWidth:560,padding:'20px 18px 36px',boxShadow:'0 -24px 70px rgba(0,0,0,.7)'}}>
+        <div style={{display:'flex',justifyContent:'center',marginBottom:14}}><div style={{width:36,height:4,borderRadius:99,background:'rgba(255,255,255,.2)'}}/></div>
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:18,alignItems:'center'}}>
+          <h3 style={{fontSize:18,fontWeight:900}}>Фильтры</h3>
+          <button onClick={onClose} style={{width:30,height:30,borderRadius:10,border:'none',background:'rgba(255,255,255,.08)',color:'rgba(255,255,255,.5)',cursor:'pointer',fontSize:14,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'inherit'}}>✕</button>
+        </div>
+        <div style={{display:'flex',flexDirection:'column',gap:18}}>
+          {/* Year */}
+          <div>
+            <label style={{display:'block',fontSize:11,fontWeight:800,opacity:.35,textTransform:'uppercase',letterSpacing:'.07em',marginBottom:8}}>Год выхода</label>
+            <div className="ns" style={{display:'flex',gap:5,overflowX:'auto',paddingBottom:4}}>
+              <button onClick={()=>setLoc(p=>({...p,year:null}))} style={{flexShrink:0,padding:'6px 12px',borderRadius:20,border:`1px solid ${!loc.year?themeP+'66':'rgba(255,255,255,.12)'}`,background:!loc.year?`${themeP}22`:'rgba(255,255,255,.06)',color:!loc.year?themeP:'rgba(255,255,255,.5)',cursor:'pointer',fontSize:12,fontWeight:800,fontFamily:'inherit'}}>Все</button>
+              {YEARS.map(y=><button key={y} onClick={()=>setLoc(p=>({...p,year:y}))} style={{flexShrink:0,padding:'6px 12px',borderRadius:20,border:`1px solid ${loc.year===y?themeP+'66':'rgba(255,255,255,.12)'}`,background:loc.year===y?`${themeP}22`:'rgba(255,255,255,.06)',color:loc.year===y?themeP:'rgba(255,255,255,.5)',cursor:'pointer',fontSize:12,fontWeight:800,fontFamily:'inherit'}}>{y}</button>)}
+            </div>
+          </div>
+          {/* Kind + Status */}
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}}>
+            <div>
+              <label style={{display:'block',fontSize:11,fontWeight:800,opacity:.35,textTransform:'uppercase',letterSpacing:'.07em',marginBottom:8}}>Тип</label>
+              <div style={{display:'flex',flexWrap:'wrap',gap:5}}>
+                {kinds.map(({v,l})=><button key={v} onClick={()=>setLoc(p=>({...p,kind:v}))} style={{padding:'6px 12px',borderRadius:20,border:`1px solid ${loc.kind===v?themeP+'66':'rgba(255,255,255,.12)'}`,background:loc.kind===v?`${themeP}22`:'rgba(255,255,255,.06)',color:loc.kind===v?themeP:'rgba(255,255,255,.5)',cursor:'pointer',fontSize:11,fontWeight:800,fontFamily:'inherit'}}>{l}</button>)}
+              </div>
+            </div>
+            <div>
+              <label style={{display:'block',fontSize:11,fontWeight:800,opacity:.35,textTransform:'uppercase',letterSpacing:'.07em',marginBottom:8}}>Статус</label>
+              <div style={{display:'flex',flexWrap:'wrap',gap:5}}>
+                {statuses.map(({v,l})=><button key={v} onClick={()=>setLoc(p=>({...p,status:v}))} style={{padding:'6px 12px',borderRadius:20,border:`1px solid ${loc.status===v?themeP+'66':'rgba(255,255,255,.12)'}`,background:loc.status===v?`${themeP}22`:'rgba(255,255,255,.06)',color:loc.status===v?themeP:'rgba(255,255,255,.5)',cursor:'pointer',fontSize:11,fontWeight:800,fontFamily:'inherit'}}>{l}</button>)}
+              </div>
+            </div>
+          </div>
+          {/* Score */}
+          <div>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
+              <label style={{fontSize:11,fontWeight:800,opacity:.35,textTransform:'uppercase',letterSpacing:'.07em'}}>Мин. рейтинг</label>
+              <span style={{fontSize:13,fontWeight:900,color:themeP}}>{loc.scoreMin>0?`${loc.scoreMin}+`:'Любой'}</span>
+            </div>
+            <input type="range" min={0} max={9} step={1} value={loc.scoreMin} onChange={e=>setLoc(p=>({...p,scoreMin:+e.target.value}))}
+              style={{width:'100%',background:`linear-gradient(90deg,${themeP} ${loc.scoreMin/9*100}%,rgba(255,255,255,.15) ${loc.scoreMin/9*100}%)`}}/>
+          </div>
+          <div style={{display:'flex',gap:10}}>
+            <button onClick={reset} className="btn-ghost" style={{flex:1,padding:13,borderRadius:14,fontSize:13}}>↺ Сброс</button>
+            <button onClick={apply} className="btn-primary" style={{flex:2,padding:13,borderRadius:14,fontSize:13,boxShadow:`0 8px 24px ${themeP}44`}}>✓ Применить</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   DETAIL PANEL (inside modal)
+═══════════════════════════════════════════════════════════════ */
+const DetailPanel = memo(({item,lib,ratings,notes,favs,wl,themeP,themeS,isAuth,onStatus,onRate,onNote,onFav,onWL,onShare}) => {
+  const [descOpen,setDescOpen] = useState(true);
+  const status   = lib[item?.id]?.status;
+  const rating   = ratings[item?.id];
+  const note     = notes[item?.id]?.text??'';
+  const isFav    = favs.has(item?.id);
+  const inWL     = wl.has(item?.id);
+  const desc     = item?.desc_text||stripHtml(item?.description)||'';
+  const grad     = `linear-gradient(135deg,${themeP},${themeS})`;
+  if(!item) return null;
+
+  const btnStyle=(active,ac)=>({padding:'10px 12px',borderRadius:12,border:`1.5px solid ${active?ac+'55':'transparent'}`,cursor:'pointer',fontWeight:800,fontSize:12,fontFamily:'inherit',transition:'all .2s',background:active?`${ac}1a`:'rgba(255,255,255,.05)',color:active?ac:'rgba(255,255,255,.4)',boxShadow:active?`0 4px 16px ${ac}30`:'',width:'100%',textAlign:'left'});
+
+  return (
+    <div className="ns" style={{overflowY:'auto',padding:'14px',display:'flex',flexDirection:'column',gap:12,height:'100%'}}>
+      {/* Poster + meta row */}
+      <div style={{display:'flex',gap:12,alignItems:'flex-start'}}>
+        {imgSrc(item)&&(
+          <div style={{width:80,flexShrink:0,borderRadius:13,overflow:'hidden',aspectRatio:'2/3',boxShadow:`0 8px 28px rgba(0,0,0,.6),0 0 0 2px ${themeP}44`,animation:'posterIn .4s ease'}}>
+            <img src={imgSrc(item)} alt="" style={{width:'100%',height:'100%',objectFit:'cover',display:'block'}}/>
+          </div>
+        )}
+        <div style={{flex:1,minWidth:0}}>
+          <p style={{fontSize:16,fontWeight:900,color:'white',lineHeight:1.3,marginBottom:6}}>{item.russian||item.name}</p>
+          {item.name&&item.russian&&item.name!==item.russian&&<p style={{fontSize:11,color:'rgba(255,255,255,.35)',fontWeight:600,marginBottom:8}} className="lc1">{item.name}</p>}
+          <div style={{display:'flex',flexWrap:'wrap',gap:5}}>
+            {item.score&&<Score n={item.score}/>}
+            {item.kind&&<span style={{fontSize:10,fontWeight:800,padding:'2px 8px',borderRadius:7,background:`${themeP}22`,color:themeP}}>{item.kind.toUpperCase()}</span>}
+            {item.status&&<span style={{fontSize:10,fontWeight:700,padding:'2px 8px',borderRadius:7,background:'rgba(255,255,255,.08)',color:'rgba(255,255,255,.45)'}}>{item.status}</span>}
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6,marginTop:9}}>
+            {[[item.aired_on?.slice(0,4),'📅 Год'],[item.episodes?`${item.episodes} эп.`:null,'🎬 Серии']].filter(([v])=>v).map(([v,l])=>(
+              <div key={l} style={{padding:'7px 9px',borderRadius:10,background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.07)'}}>
+                <p style={{margin:'0 0 2px',fontSize:9,fontWeight:700,opacity:.35}}>{l}</p>
+                <p style={{margin:0,fontSize:13,fontWeight:900}}>{v}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Description */}
+      {desc&&(
+        <div style={{borderRadius:14,overflow:'hidden',background:'rgba(255,255,255,.04)',border:`1px solid ${themeP}22`}}>
+          <button onClick={()=>setDescOpen(x=>!x)} style={{width:'100%',display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 13px',background:'none',border:'none',cursor:'pointer',color:themeP,fontSize:11,fontWeight:900,textTransform:'uppercase',letterSpacing:'.06em',fontFamily:'inherit'}}>
+            <span>📝 Описание</span>
+            <span style={{transition:'transform .3s',transform:descOpen?'rotate(180deg)':'none',opacity:.6}}>▾</span>
+          </button>
+          {descOpen&&(
+            <div className="desc-expand ns" style={{padding:'0 13px 13px',maxHeight:220,overflowY:'auto'}}>
+              {item?.genres?.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:4,marginBottom:10}}>
+                {item.genres.map(g=><span key={g.id} style={{fontSize:10,fontWeight:700,padding:'2px 8px',borderRadius:20,background:`${themeP}18`,color:`${themeP}cc`,border:`1px solid ${themeP}30`}}>{g.russian||g.name}</span>)}
+              </div>}
+              <p style={{fontSize:12,lineHeight:1.7,color:'rgba(255,255,255,.6)'}}>{desc}</p>
+            </div>
           )}
         </div>
       )}
 
-      {/* Header - Same as before but optimized */}
-      <header className="sticky top-0 z-[1000] glass-strong border-b border-white/10 backdrop-blur-2xl animate-slide-down">
-        <div className="max-w-[1920px] mx-auto px-3 md:px-6 py-3 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 md:gap-6 shrink-0">
-            <div 
-              onClick={() => { setView('home'); setPage(1); setActiveGenre(null); setSearchQuery(''); }} 
-              className="flex items-center gap-2 cursor-pointer group"
-            >
-              <div className="relative w-8 h-8 md:w-12 md:h-12 overflow-hidden rounded-lg md:rounded-xl neon-border animate-glow">
-                <div className="absolute inset-0 bg-gradient-to-br" style={{
-                  backgroundImage: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`
-                }} />
-                <img 
-                  src={logo} 
-                  alt="AniHub"
-                  className="relative w-full h-full object-cover group-hover:scale-110 transition-transform duration-500 mix-blend-overlay"
-                />
-              </div>
-              <h1 className="text-lg md:text-2xl font-black tracking-tighter uppercase hidden sm:block">
-                ANI<span style={{ color: theme.primary }}>HUB</span>
-              </h1>
-            </div>
+      {/* Status */}
+      <div>
+        <p style={{fontSize:10,fontWeight:900,opacity:.35,textTransform:'uppercase',letterSpacing:'.08em',marginBottom:7}}>Статус просмотра</p>
+        <div style={{display:'flex',flexDirection:'column',gap:5}}>
+          {[['watching','👁 Смотрю','#60a5fa'],['planned','⏳ В планах','#f59e0b'],['completed','✅ Завершено','#22c55e']].map(([k,l,c])=>(
+            <button key={k} onClick={()=>onStatus(item,k)} style={btnStyle(status===k,c)}>{l}</button>
+          ))}
+        </div>
+      </div>
 
-            <nav className="hidden lg:flex gap-4">
-              {[
-                { key: 'home', label: 'Главная', icon: '🏠' },
-                { key: 'manga', label: 'Манга', icon: '📚' },
-                { key: 'trending_list', label: 'Тренды', icon: '🔥' },
-                { key: 'favorites', label: 'Избранное', icon: '❤️' },
-                { key: 'collection', label: 'Коллекция', icon: '📁' }
-                
-              ].map(m => (
-                <button
-                  key={m.key}
-                  onClick={() => setView(m.key)}
-                  className={`text-[10px] font-black uppercase tracking-wider transition-all relative group ${
-                    view === m.key ? 'neon-text scale-110' : 'opacity-60 hover:opacity-100'
-                  }`}
-                  style={{ color: view === m.key ? theme.primary : undefined }}
-                >
-                  <span className="mr-1">{m.icon}</span>
-                  {m.label}
-                </button>
-              ))}
-            </nav>
-          </div>
-
-          <div className="flex-1 max-w-md mx-2">
-            <div className="relative">
-              <input
-                type="text"
-                placeholder="🔍 Поиск..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className={`w-full py-2 md:py-3 px-3 md:px-4 pl-10 rounded-lg md:rounded-xl glass border-2 transition-all font-bold text-xs ${
-                  isDarkMode 
-                    ? 'bg-white/5 text-white placeholder-white/40' 
-                    : 'bg-white border-slate-200 text-slate-900 placeholder-slate-400'
-                }`}
-                style={{
-                  borderColor: searchQuery ? theme.primary : 'transparent'
-                }}
-              />
-              <div className="absolute left-3 top-1/2 -translate-y-1/2 text-lg">🔍</div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 shrink-0">
-            <button 
-              onClick={randomAnime}
-              className="hidden sm:flex items-center gap-1 px-3 py-2 glass rounded-lg hover:scale-105 transition-all text-xs font-black"
-            >
-              <span className="animate-rotate">🎲</span>
+      {/* Rating */}
+      <div>
+        <p style={{fontSize:10,fontWeight:900,opacity:.35,textTransform:'uppercase',letterSpacing:'.08em',marginBottom:7}}>Оценка</p>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:5}}>
+          {[1,2,3,4,5,6,7,8,9,10].map(sc=>(
+            <button key={sc} onClick={()=>onRate(item,sc)} style={{aspectRatio:'1/1',borderRadius:10,border:'none',cursor:'pointer',fontWeight:900,fontSize:13,fontFamily:'inherit',transition:'all .2s',background:rating===sc?grad:'rgba(255,255,255,.07)',color:rating===sc?'white':'rgba(255,255,255,.35)',boxShadow:rating===sc?`0 4px 14px ${themeP}44`:'',transform:rating===sc?'scale(1.1)':'scale(1)',animation:rating===sc?'pop .3s ease both':''}}>
+              {sc}
             </button>
-            
-            {!isLoggedIn ? (
-              <button 
-                onClick={() => setShowAuthModal(true)}
-                className="px-3 md:px-4 py-2 rounded-lg font-black uppercase text-xs text-white hover:scale-105 transition-all"
-                style={{
-                  background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`
-                }}
-              >
-                Войти
-              </button>
-            ) : (
-              <>
-                <button 
-                  onClick={() => setIsSettingsOpen(true)}
-                  className="w-8 h-8 md:w-10 md:h-10 rounded-lg glass flex items-center justify-center hover:scale-105 transition-all"
-                >
-                  ⚙️
-                </button>
-                
-                <div 
-                  onClick={() => setIsProfileModalOpen(true)} 
-                  className="relative cursor-pointer group"
-                >
-                  <div className="absolute inset-0 rounded-lg animate-glow" style={{
-                    boxShadow: `0 0 15px ${theme.primary}60`
-                  }} />
-                  <img 
-                    src={user.avatar} 
-                    className="relative w-8 h-8 md:w-10 md:h-10 rounded-lg object-cover border-2 group-hover:scale-110 transition-transform" 
-                    style={{ borderColor: theme.primary }}
-                    alt="Avatar" 
-                  />
-                  {achievements.length > 0 && (
-                    <div 
-                      className="absolute -top-1 -right-1 w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-black text-white"
-                      style={{ background: theme.primary }}
-                    >
-                      {achievements.length}
-                    </div>
-                  )}
+          ))}
+        </div>
+      </div>
+
+      {/* Notes */}
+      {isAuth&&(
+        <div>
+          <p style={{fontSize:10,fontWeight:900,opacity:.35,textTransform:'uppercase',letterSpacing:'.08em',marginBottom:7}}>Заметки</p>
+          <textarea value={note} onChange={e=>onNote(item.id,e.target.value)} placeholder="Ваши мысли…" rows={3}
+            style={{width:'100%',padding:'10px 12px',borderRadius:12,border:`1.5px solid ${note?themeP+'66':'rgba(255,255,255,.1)'}`,background:'rgba(255,255,255,.05)',color:'rgba(255,255,255,.85)',fontSize:12,fontWeight:500,resize:'vertical',outline:'none',fontFamily:'inherit',transition:'border-color .2s',minHeight:70}}
+            onFocus={e=>e.target.style.borderColor=themeP+'88'}
+            onBlur={e=>e.target.style.borderColor=note?themeP+'66':'rgba(255,255,255,.1)'}/>
+        </div>
+      )}
+
+      {/* Actions */}
+      <div style={{display:'flex',gap:7}}>
+        <button onClick={()=>onWL(item)} style={{...btnStyle(inWL,themeP),flex:1}}>{inWL?'✓ В списке':'+ В список'}</button>
+        <button onClick={()=>onFav(item)} style={{...btnStyle(isFav,'#ec4899'),flex:1}}>{isFav?'♥ Избранное':'♡ Избранное'}</button>
+      </div>
+      <button onClick={()=>onShare(item)} className="btn-ghost" style={{padding:'9px',borderRadius:12,fontSize:12,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',gap:6}}>
+        <span>📤</span><span>Поделиться</span>
+      </button>
+    </div>
+  );
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   ITEM MODAL
+═══════════════════════════════════════════════════════════════ */
+const ItemModal = memo(({item,...rest}) => {
+  if(!item) return null;
+  const {themeP,themeS,onClose} = rest;
+  return (
+    <div className="fi" style={{position:'fixed',inset:0,zIndex:9800,background:'rgba(0,0,0,.97)',display:'flex',flexDirection:'column'}}>
+      <div className="glass-dark" style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0 13px',height:50,flexShrink:0,borderBottom:'1px solid rgba(255,255,255,.07)'}}>
+        <div style={{display:'flex',alignItems:'center',gap:9,minWidth:0}}>
+          <button onClick={onClose} style={{width:34,height:34,borderRadius:10,border:'none',background:'rgba(255,255,255,.08)',cursor:'pointer',color:'white',fontSize:16,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>←</button>
+          <p className="lc1" style={{fontSize:13,fontWeight:900,color:'white'}}>{item.russian||item.name}</p>
+        </div>
+        <button onClick={onClose} style={{width:32,height:32,borderRadius:10,border:'1px solid rgba(239,68,68,.4)',background:'rgba(239,68,68,.12)',cursor:'pointer',color:'#f87171',fontSize:14,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>✕</button>
+      </div>
+      <div style={{flex:1,display:'flex',overflow:'hidden'}} className="modal-inner">
+        {/* Player / image area */}
+        <div style={{background:'#000',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,minHeight:220,maxHeight:'45vh',position:'relative',flex:'none',width:'100%'}} className="player-pane">
+          {item.kind==='manga'?(
+            <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:14,padding:20,width:'100%'}}>
+              {imgSrc(item)&&<img src={imgSrc(item)} alt="" style={{maxHeight:200,borderRadius:16,boxShadow:`0 8px 32px ${themeP}44,0 0 0 2px ${themeP}44`,animation:'posterIn .5s ease'}}/>}
+              <a href={`https://shikimori.one${item.url||''}`} target="_blank" rel="noreferrer" className="btn-primary" style={{padding:'12px 28px',borderRadius:14,fontSize:14,boxShadow:`0 8px 24px ${themeP}44`,display:'inline-block'}}>📖 Читать на Shikimori</a>
+            </div>
+          ):(
+            <iframe src={`https://kodik.info/find-player?shikimoriID=${item.id}`} style={{width:'100%',height:'100%',border:'none',minHeight:220}} allowFullScreen allow="autoplay; fullscreen; picture-in-picture" title="Player"/>
+          )}
+        </div>
+        {/* Detail panel */}
+        <div style={{flex:1,overflow:'hidden',borderTop:'1px solid rgba(255,255,255,.07)'}}>
+          <DetailPanel item={item} {...rest}/>
+        </div>
+      </div>
+      <style>{`
+        @media(min-width:1024px){
+          .player-pane{flex:1!important;max-height:none!important;width:auto!important;min-height:0!important}
+        }
+      `}</style>
+    </div>
+  );
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   STATS PAGE
+═══════════════════════════════════════════════════════════════ */
+const StatsPage = memo(({stats,user,lib,ratings,favs,achs,themeP,themeS}) => {
+  const grad  = `linear-gradient(135deg,${themeP},${themeS})`;
+  const rank  = getRank(user.xp);
+  const rvals = Object.values(ratings);
+  const dist  = Array.from({length:10},(_,i)=>({s:i+1,c:rvals.filter(r=>r===i+1).length}));
+  const maxC  = Math.max(...dist.map(d=>d.c),1);
+  const byS   = {completed:Object.values(lib).filter(a=>a.status==='completed').length,watching:Object.values(lib).filter(a=>a.status==='watching').length,planned:Object.values(lib).filter(a=>a.status==='planned').length};
+
+  return (
+    <div className="fu" style={{display:'flex',flexDirection:'column',gap:14}}>
+      {/* Rank hero */}
+      <div style={{borderRadius:22,padding:20,background:`linear-gradient(135deg,${themeP}1a,${themeS}0d)`,border:`1px solid ${themeP}33`,position:'relative',overflow:'hidden'}}>
+        <div style={{position:'absolute',top:-50,right:-50,width:200,height:200,borderRadius:'50%',background:`${themeP}08`,pointerEvents:'none'}}/>
+        <div style={{display:'flex',alignItems:'center',gap:14,position:'relative'}}>
+          <div style={{width:68,height:68,borderRadius:18,background:grad,display:'flex',alignItems:'center',justifyContent:'center',fontSize:32,boxShadow:`0 8px 28px ${themeP}55`,flexShrink:0,animation:'glow 3s ease infinite'}}>{rank.b}</div>
+          <div style={{flex:1,minWidth:0}}>
+            <p style={{fontSize:22,fontWeight:900,color:rank.c,marginBottom:3}}>{rank.l}</p>
+            <p style={{fontSize:12,color:'rgba(255,255,255,.45)',fontWeight:600,marginBottom:9}}>Уровень {stats.level} · {user.xp} XP всего</p>
+            <Bar value={stats.xpInLvl} max={100} grad={grad} h={6}/>
+            <p style={{fontSize:10,color:'rgba(255,255,255,.3)',fontWeight:600,marginTop:4}}>{stats.xpInLvl}/100 XP до следующего уровня</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Stats grid */}
+      <div className="stats-grid">
+        {[['Завершено',stats.watched,'#22c55e','✅'],['Смотрю',stats.watching,'#60a5fa','👁'],['В планах',stats.planned,'#f59e0b','⏳'],['Часов',stats.hours,'#a855f7','⏱'],['Оценено',stats.rated,'#eab308','★'],['Ср. оценка',stats.avgRating,'#ec4899','♥'],['Избранное',favs,'#f97316','♡'],['Заметки',stats.notes,'#14b8a6','📝']].map(([l,v,c,i])=>(
+          <div key={l} style={{padding:12,borderRadius:14,background:`${c}0e`,border:`1px solid ${c}22`,animation:'countUp .4s ease both'}}>
+            <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:4}}>
+              <span style={{fontSize:14}}>{i}</span>
+              <span style={{fontSize:10,fontWeight:700,color:`${c}88`,textTransform:'uppercase',letterSpacing:'.04em'}}>{l}</span>
+            </div>
+            <p style={{fontSize:24,fontWeight:900,color:c,lineHeight:1}}>{fmt(v)}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Library status distribution */}
+      <div className="card" style={{borderRadius:18,padding:18}}>
+        <p style={{fontSize:11,fontWeight:800,opacity:.35,textTransform:'uppercase',letterSpacing:'.08em',marginBottom:14}}>Библиотека</p>
+        {[['completed','Завершено','#22c55e'],['watching','Смотрю','#60a5fa'],['planned','В планах','#f59e0b']].map(([k,l,c])=>(
+          <div key={k} style={{marginBottom:12}}>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:5}}>
+              <span style={{fontSize:12,fontWeight:700,color:'rgba(255,255,255,.55)'}}>{l}</span>
+              <span style={{fontSize:12,fontWeight:900,color:c}}>{byS[k]}</span>
+            </div>
+            <Bar value={byS[k]} max={Math.max(...Object.values(byS),1)} grad={`linear-gradient(90deg,${c},${c}88)`} h={5}/>
+          </div>
+        ))}
+      </div>
+
+      {/* Rating chart */}
+      {rvals.length>0&&(
+        <div className="card" style={{borderRadius:18,padding:18}}>
+          <p style={{fontSize:11,fontWeight:800,opacity:.35,textTransform:'uppercase',letterSpacing:'.08em',marginBottom:14}}>Распределение оценок</p>
+          <div style={{display:'flex',gap:5,alignItems:'flex-end',height:80}}>
+            {dist.map(({s,c})=>{
+              const h=(c/maxC)*100;
+              const col=s>=8?'#22c55e':s>=6?'#eab308':s>=4?'#f97316':'#ef4444';
+              return (
+                <div key={s} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:3}}>
+                  <span style={{fontSize:9,fontWeight:900,color:'rgba(255,255,255,.35)'}}>{c||''}</span>
+                  <div style={{width:'100%',borderRadius:'4px 4px 0 0',background:c?col:'rgba(255,255,255,.07)',height:`${Math.max(h,c?8:4)}%`,transition:'height .6s ease',minHeight:4}}/>
+                  <span style={{fontSize:9,fontWeight:800,color:'rgba(255,255,255,.35)'}}>{s}</span>
                 </div>
-              </>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Achievements */}
+      <div className="card" style={{borderRadius:18,padding:18}}>
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
+          <p style={{fontSize:11,fontWeight:800,opacity:.35,textTransform:'uppercase',letterSpacing:'.08em'}}>Достижения</p>
+          <span style={{fontSize:12,fontWeight:900,color:themeP}}>{achs.length}/{ACHS.length}</span>
+        </div>
+        <Bar value={achs.length} max={ACHS.length} grad={grad} h={6} style={{marginBottom:14}}/>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:6}}>
+          {ACHS.map(a=>{
+            const done=achs.includes(a.id);
+            return (
+              <div key={a.id} title={`${a.n}: ${a.d}`} style={{borderRadius:12,padding:'9px 4px',textAlign:'center',background:done?`${themeP}18`:'rgba(255,255,255,.04)',border:`1px solid ${done?themeP+'44':'rgba(255,255,255,.06)'}`,opacity:done?1:.38,transition:'all .3s',animation:done?'pop .5s ease both':''}}>
+                <span style={{fontSize:18,display:'block',marginBottom:3}}>{a.e}</span>
+                <p style={{fontSize:9,fontWeight:900,color:done?'white':'rgba(255,255,255,.5)',lineHeight:1.2}}>{a.n}</p>
+                {done&&<p style={{fontSize:9,fontWeight:900,color:themeP,marginTop:2}}>+{a.xp}XP</p>}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Login streak */}
+      <div className="card" style={{borderRadius:18,padding:18}}>
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
+          <p style={{fontSize:11,fontWeight:800,opacity:.35,textTransform:'uppercase',letterSpacing:'.08em'}}>Стрик входа</p>
+          <span style={{fontSize:12,fontWeight:900,color:'#f97316'}}>{user.loginStreak||0} дней 🔥</span>
+        </div>
+        <div style={{display:'flex',gap:5}}>
+          {Array(7).fill(0).map((_,i)=>(
+            <div key={i} style={{flex:1,height:8,borderRadius:99,background:i<(user.loginStreak||0)?grad:'rgba(255,255,255,.09)',transition:'background .3s'}}/>
+          ))}
+        </div>
+        <div style={{display:'flex',justifyContent:'space-between',marginTop:6}}>
+          {['Пн','Вт','Ср','Чт','Пт','Сб','Вс'].map((d,i)=>(
+            <span key={i} style={{flex:1,textAlign:'center',fontSize:9,fontWeight:700,color:i<(user.loginStreak||0)?themeP:'rgba(255,255,255,.2)'}}>{d}</span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   PROFILE SHEET
+═══════════════════════════════════════════════════════════════ */
+const ProfileSheet = memo(({user,stats,achs,themeP,themeS,syncSt,curTheme,darkMode,dailyGoal,onClose,onSave,onLogout,onDelete,onExport,onImport,onAvatar,onUser,onTheme,onDark,onDGoal,fileRef}) => {
+  const [tab,setTab] = useState('profile');
+  const rank = getRank(user.xp);
+  const grad = `linear-gradient(135deg,${themeP},${themeS})`;
+  const syncC={idle:'rgba(255,255,255,.3)',syncing:themeP,synced:'#22c55e',error:'#ef4444'}[syncSt];
+  const inp={width:'100%',padding:'11px 13px',borderRadius:12,border:'1.5px solid rgba(255,255,255,.1)',background:'rgba(255,255,255,.06)',color:'white',fontSize:13,fontWeight:700,outline:'none',fontFamily:'inherit',transition:'all .2s'};
+
+  return (
+    <div style={{position:'fixed',inset:0,zIndex:9900,display:'flex',flexDirection:'column',justifyContent:'flex-end'}}>
+      <div className="fi" style={{position:'absolute',inset:0,background:'rgba(0,0,0,.78)',backdropFilter:'blur(16px)'}} onClick={onClose}/>
+      <div className="su glass-dark prof-sheet" style={{position:'relative',borderRadius:'26px 26px 0 0',maxHeight:'92dvh',display:'flex',flexDirection:'column',boxShadow:'0 -28px 70px rgba(0,0,0,.75)'}}>
+        <div style={{display:'flex',justifyContent:'center',padding:'10px 0 4px',flexShrink:0}}>
+          <div style={{width:36,height:4,borderRadius:99,background:'rgba(255,255,255,.2)'}}/>
+        </div>
+        {/* Header */}
+        <div style={{display:'flex',alignItems:'center',gap:12,padding:'8px 18px 12px',flexShrink:0,borderBottom:'1px solid rgba(255,255,255,.07)'}}>
+          <div style={{position:'relative',flexShrink:0}}>
+            <img src={user.avatar} alt="" onClick={()=>fileRef.current?.click()} style={{width:52,height:52,borderRadius:16,objectFit:'cover',border:`2.5px solid ${themeP}`,boxShadow:`0 0 18px ${themeP}55`,cursor:'pointer',display:'block'}}/>
+            <input type="file" ref={fileRef} onChange={onAvatar} accept="image/*" style={{display:'none'}}/>
+            <div style={{position:'absolute',bottom:-4,right:-4,width:18,height:18,borderRadius:6,background:grad,display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,color:'white',fontWeight:900,pointerEvents:'none'}}>✎</div>
+          </div>
+          <div style={{flex:1,minWidth:0}}>
+            <p className="lc1" style={{fontSize:16,fontWeight:900,color:'white'}}>{user.name}</p>
+            <p style={{fontSize:11,fontWeight:700,color:rank.c,marginTop:2}}>{rank.b} {rank.l} · Ур.{stats.level}</p>
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}>
+            <div style={{display:'flex',alignItems:'center',gap:5,padding:'4px 9px',borderRadius:8,background:'rgba(255,255,255,.06)',color:syncC,fontSize:10,fontWeight:800}}>
+              {syncSt==='syncing'?<Spinner size={10} color={themeP}/>:<span style={{width:6,height:6,borderRadius:'50%',background:'currentColor',display:'inline-block',flexShrink:0}}/>}
+              <span>{syncSt==='synced'?'Сохр.':syncSt==='syncing'?'Синхр.':syncSt==='error'?'Ошибка':'Облако'}</span>
+            </div>
+            <button onClick={onClose} style={{width:30,height:30,borderRadius:10,border:'none',background:'rgba(255,255,255,.08)',cursor:'pointer',color:'rgba(255,255,255,.5)',fontSize:14,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'inherit'}}>✕</button>
+          </div>
+        </div>
+        {/* XP bar */}
+        <div style={{padding:'8px 18px 12px',flexShrink:0,borderBottom:'1px solid rgba(255,255,255,.07)'}}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:5}}>
+            <span style={{fontSize:11,opacity:.35,fontWeight:700}}>Прогресс уровня</span>
+            <span style={{fontSize:11,fontWeight:900,color:themeP}}>{stats.xpInLvl}/100 XP</span>
+          </div>
+          <Bar value={stats.xpInLvl} max={100} grad={grad} h={5}/>
+        </div>
+        {/* Tabs */}
+        <div style={{display:'flex',gap:4,padding:'8px 18px',flexShrink:0,borderBottom:'1px solid rgba(255,255,255,.07)'}}>
+          {[['profile','Профиль','👤'],['settings','Настройки','⚙️'],['data','Данные','💾']].map(([k,l,i])=>(
+            <button key={k} onClick={()=>setTab(k)} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:2,padding:'7px 4px',borderRadius:10,border:'none',cursor:'pointer',fontFamily:'inherit',background:tab===k?`${themeP}22`:'transparent',color:tab===k?themeP:'rgba(255,255,255,.35)',transition:'all .2s'}}>
+              <span style={{fontSize:15}}>{i}</span><span style={{fontSize:10,fontWeight:800}}>{l}</span>
+            </button>
+          ))}
+        </div>
+        {/* Tab content */}
+        <div className="ns" style={{flex:1,overflowY:'auto',padding:'16px 18px 32px'}}>
+          {tab==='profile'&&(
+            <div className="fu" style={{display:'flex',flexDirection:'column',gap:12}}>
+              <div>
+                <label style={{display:'block',fontSize:10,fontWeight:900,opacity:.35,textTransform:'uppercase',letterSpacing:'.06em',marginBottom:6}}>Имя</label>
+                <input value={user.name} maxLength={20} onChange={e=>onUser({name:e.target.value})} style={inp} onFocus={e=>{e.target.style.borderColor=themeP+'88';e.target.style.boxShadow=`0 0 0 3px ${themeP}15`;}} onBlur={e=>{e.target.style.borderColor='rgba(255,255,255,.1)';e.target.style.boxShadow='';}}/>
+              </div>
+              <div>
+                <label style={{display:'block',fontSize:10,fontWeight:900,opacity:.35,textTransform:'uppercase',letterSpacing:'.06em',marginBottom:6}}>Биография</label>
+                <input value={user.bio||''} maxLength={80} onChange={e=>onUser({bio:e.target.value})} placeholder="Расскажите о себе…" style={{...inp,color:'rgba(255,255,255,.7)'}} onFocus={e=>{e.target.style.borderColor=themeP+'88';e.target.style.boxShadow=`0 0 0 3px ${themeP}15`;}} onBlur={e=>{e.target.style.borderColor='rgba(255,255,255,.1)';e.target.style.boxShadow='';}}/>
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8}}>
+                {[['Завершено',stats.watched,'✅'],['Часов',stats.hours,'⏱'],['Оценено',stats.rated,'★']].map(([l,v,i])=>(
+                  <div key={l} style={{borderRadius:14,padding:'12px 8px',textAlign:'center',background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.07)'}}>
+                    <span style={{fontSize:20,display:'block',marginBottom:3}}>{i}</span>
+                    <p style={{fontSize:18,fontWeight:900,color:'white'}}>{fmt(v)}</p>
+                    <p style={{fontSize:10,opacity:.35,fontWeight:700}}>{l}</p>
+                  </div>
+                ))}
+              </div>
+              <div style={{padding:13,borderRadius:14,background:'rgba(255,255,255,.04)',border:'1px solid rgba(255,255,255,.07)'}}>
+                <div style={{display:'flex',justifyContent:'space-between',marginBottom:7}}>
+                  <span style={{fontSize:11,opacity:.35,fontWeight:700}}>Стрик входа</span>
+                  <span style={{fontSize:11,fontWeight:900,color:'#f97316'}}>{user.loginStreak||0} дней 🔥</span>
+                </div>
+                <div style={{display:'flex',gap:5}}>
+                  {Array(7).fill(0).map((_,i)=><div key={i} style={{flex:1,height:6,borderRadius:99,background:i<(user.loginStreak||0)?grad:'rgba(255,255,255,.1)',transition:'background .3s'}}/>)}
+                </div>
+              </div>
+              <button onClick={()=>{onSave();onClose();}} className="btn-primary" style={{padding:13,borderRadius:14,fontSize:14,boxShadow:`0 8px 24px ${themeP}44`}}>💾 Сохранить</button>
+              <button onClick={onLogout} className="btn-ghost" style={{padding:11,borderRadius:12,fontSize:13,border:'1px solid rgba(239,68,68,.3)',color:'#f87171',background:'rgba(239,68,68,.09)'}}>🚪 Выйти</button>
+              <button onClick={onDelete} style={{padding:7,borderRadius:10,border:'none',background:'transparent',color:'rgba(239,68,68,.25)',cursor:'pointer',fontSize:11,fontWeight:700,fontFamily:'inherit',textAlign:'center'}}>⚠ Удалить аккаунт</button>
+            </div>
+          )}
+          {tab==='settings'&&(
+            <div className="fu" style={{display:'flex',flexDirection:'column',gap:16}}>
+              <div>
+                <p style={{fontSize:11,fontWeight:800,opacity:.35,textTransform:'uppercase',letterSpacing:'.08em',marginBottom:10}}>Цветовая тема</p>
+                <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:7}}>
+                  {Object.entries(THEMES).map(([k,t])=>{
+                    const active=curTheme===k;
+                    return <button key={k} onClick={()=>onTheme(k)} style={{padding:'10px 4px',borderRadius:13,border:`1.5px solid ${active?t.p:'rgba(255,255,255,.07)'}`,background:active?`${t.p}22`:'rgba(255,255,255,.04)',cursor:'pointer',textAlign:'center',fontFamily:'inherit',transition:'all .2s',transform:active?'scale(1.06)':'scale(1)'}}>
+                      <div style={{fontSize:17,marginBottom:3}}>{t.i}</div>
+                      <p style={{fontSize:10,fontWeight:900,color:active?t.p:'rgba(255,255,255,.45)',margin:0}}>{t.n}</p>
+                    </button>;
+                  })}
+                </div>
+              </div>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 13px',borderRadius:14,background:'rgba(255,255,255,.04)',border:'1px solid rgba(255,255,255,.07)'}}>
+                <div><p style={{fontSize:13,fontWeight:800}}>Тёмный режим</p><p style={{fontSize:11,opacity:.35,marginTop:2}}>Всегда тёмная тема</p></div>
+                <Toggle v={darkMode} onChange={onDark} color={themeP}/>
+              </div>
+              <div style={{padding:'12px 13px',borderRadius:14,background:'rgba(255,255,255,.04)',border:'1px solid rgba(255,255,255,.07)'}}>
+                <div style={{display:'flex',justifyContent:'space-between',marginBottom:10}}>
+                  <div><p style={{fontSize:13,fontWeight:800}}>Дневная цель</p><p style={{fontSize:11,opacity:.35,marginTop:2}}>Аниме в день</p></div>
+                  <span style={{fontSize:24,fontWeight:900,color:themeP}}>{dailyGoal}</span>
+                </div>
+                <input type="range" min={1} max={10} value={dailyGoal} onChange={e=>onDGoal(+e.target.value)} style={{width:'100%',background:`linear-gradient(90deg,${themeP} ${dailyGoal*10}%,rgba(255,255,255,.12) ${dailyGoal*10}%)`}}/>
+              </div>
+            </div>
+          )}
+          {tab==='data'&&(
+            <div className="fu" style={{display:'flex',flexDirection:'column',gap:11}}>
+              <div style={{padding:14,borderRadius:14,background:'rgba(34,197,94,.06)',border:'1px solid rgba(34,197,94,.2)'}}>
+                <p style={{fontSize:12,fontWeight:800,color:'#22c55e',marginBottom:5}}>✓ Облачная синхронизация</p>
+                <p style={{fontSize:11,opacity:.5,lineHeight:1.55}}>Данные синхронизируются между устройствами. Войдите с теми же данными на другом устройстве.</p>
+              </div>
+              <div style={{display:'flex',gap:8}}>
+                <button onClick={onExport} className="btn-ghost" style={{flex:1,padding:12,borderRadius:12,fontSize:12}}>💾 Экспорт</button>
+                <label style={{flex:1,cursor:'pointer'}}>
+                  <input type="file" onChange={onImport} accept=".json" style={{display:'none'}}/>
+                  <div className="btn-ghost" style={{padding:12,borderRadius:12,fontSize:12,fontWeight:800,textAlign:'center',cursor:'pointer',border:'1px solid rgba(255,255,255,.1)'}}>📥 Импорт</div>
+                </label>
+              </div>
+              <button onClick={()=>{if(window.confirm('Сбросить все данные?')){Object.keys(localStorage).filter(k=>k.startsWith('aniHub')).forEach(k=>localStorage.removeItem(k));window.location.reload();}}} style={{padding:10,borderRadius:12,border:'1px solid rgba(249,115,22,.3)',background:'rgba(249,115,22,.07)',color:'#fb923c',cursor:'pointer',fontSize:12,fontWeight:800,fontFamily:'inherit'}}>🗑 Сбросить данные</button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   AUTH FORM
+═══════════════════════════════════════════════════════════════ */
+const AuthForm = memo(({mode,onSubmit,themeP,themeS,error,onToggle}) => {
+  const [u,su] = useState('');
+  const [p,sp] = useState('');
+  const [show,setShow] = useState(false);
+  const [rem,setRem]   = useState(true);
+  const inp={width:'100%',padding:'13px 14px',borderRadius:13,border:'1.5px solid rgba(255,255,255,.1)',background:'rgba(255,255,255,.07)',color:'white',fontSize:14,fontWeight:600,outline:'none',fontFamily:'inherit',transition:'all .2s'};
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:13}}>
+      {error&&<div style={{padding:'10px 13px',borderRadius:12,background:'#ef444418',border:'1px solid #ef444440',color:'#f87171',fontSize:13,fontWeight:700,textAlign:'center'}}>{error}</div>}
+      <div>
+        <label style={{display:'block',fontSize:11,fontWeight:800,opacity:.4,marginBottom:6,textTransform:'uppercase',letterSpacing:'.06em'}}>Имя пользователя</label>
+        <input value={u} onChange={e=>su(e.target.value)} placeholder="Минимум 3 символа" style={inp} onFocus={e=>{e.target.style.borderColor=themeP+'88';e.target.style.boxShadow=`0 0 0 3px ${themeP}15`;}} onBlur={e=>{e.target.style.borderColor='rgba(255,255,255,.1)';e.target.style.boxShadow='';}}/>
+      </div>
+      <div>
+        <label style={{display:'block',fontSize:11,fontWeight:800,opacity:.4,marginBottom:6,textTransform:'uppercase',letterSpacing:'.06em'}}>Пароль</label>
+        <div style={{position:'relative'}}>
+          <input type={show?'text':'password'} value={p} onChange={e=>sp(e.target.value)} placeholder="Минимум 6 символов" style={{...inp,paddingRight:44}} onFocus={e=>{e.target.style.borderColor=themeP+'88';e.target.style.boxShadow=`0 0 0 3px ${themeP}15`;}} onBlur={e=>{e.target.style.borderColor='rgba(255,255,255,.1)';e.target.style.boxShadow='';}} onKeyDown={e=>e.key==='Enter'&&onSubmit({u,p,rem})}/>
+          <button type="button" onClick={()=>setShow(x=>!x)} style={{position:'absolute',right:12,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',fontSize:17,opacity:.4,color:'white',padding:0}}>{show?'🙈':'👁'}</button>
+        </div>
+      </div>
+      <div style={{display:'flex',alignItems:'center',gap:10,cursor:'pointer'}} onClick={()=>setRem(x=>!x)}>
+        <div style={{width:21,height:21,borderRadius:7,display:'flex',alignItems:'center',justifyContent:'center',background:rem?`linear-gradient(135deg,${themeP},${themeS})`:'rgba(255,255,255,.1)',border:`1.5px solid ${rem?themeP:'rgba(255,255,255,.2)'}`,flexShrink:0,transition:'all .2s'}}>
+          {rem&&<span style={{color:'white',fontSize:11,fontWeight:900}}>✓</span>}
+        </div>
+        <span style={{fontSize:13,opacity:.5,fontWeight:600,userSelect:'none'}}>Запомнить на 90 дней</span>
+      </div>
+      <button type="button" onClick={()=>onSubmit({u,p,rem})} className="btn-primary" style={{width:'100%',padding:15,borderRadius:14,fontSize:15,boxShadow:`0 10px 28px ${themeP}44`}}>
+        {mode==='login'?'🔐 Войти':'✨ Создать аккаунт'}
+      </button>
+      <p style={{textAlign:'center',fontSize:12}}>
+        <button type="button" onClick={onToggle} style={{background:'none',border:'none',cursor:'pointer',color:themeP,fontWeight:700,fontSize:13,fontFamily:'inherit',opacity:.85}}>
+          {mode==='login'?'Нет аккаунта? → Регистрация':'Есть аккаунт? → Войти'}
+        </button>
+      </p>
+    </div>
+  );
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   MAIN APP
+═══════════════════════════════════════════════════════════════ */
+export default function App() {
+
+  /* ── Auth state ── */
+  const [accounts, setAccounts] = useState({});
+  const [isAuth,   setIsAuth]   = useState(false);
+  const [curAcc,   setCurAcc]   = useState(null);
+  const [authOpen, setAuthOpen] = useState(false);
+  const [authMode, setAuthMode] = useState('login');
+  const [authErr,  setAuthErr]  = useState('');
+  const [logoutDlg,setLogoutDlg]= useState(false);
+  const [syncSt,   setSyncSt]   = useState('idle');
+
+  /* ── User data ── */
+  const [user,     setUser]     = useState(()=>mkUser());
+  const [library,  setLibrary]  = useState({});
+  const [histD,    setHistD]    = useState([]);
+  const [ratings,  setRatings]  = useState({});
+  const [achs,     setAchs]     = useState([]);
+  const [favs,     setFavs]     = useState([]);
+  const [notes,    setNotes]    = useState({});
+  const [wl,       setWl]       = useState([]);
+  const [dailyGoal,setDailyGoal]= useState(3);
+  const [dailyProg,setDailyProg]= useState(0);
+  const [searchHist,setSearchHist]=useState([]);
+  const [shareCount,setShareCount]=useState(0);
+  const [xpToday,  setXpToday]  = useState({});
+
+  /* ── UI state ── */
+  const [boot,      setBoot]      = useState(true);
+  const [view,      setView]      = useState('home');
+  const [content,   setContent]   = useState([]);
+  const [trendCache,setTrendCache]= useState([]);
+  const [selItem,   setSelItem]   = useState(null);
+  const [loading,   setLoading]   = useState(true);
+  const [search,    setSearch]    = useState('');
+  const [genre,     setGenre]     = useState(null);
+  const [page,      setPage]      = useState(1);
+  const [sort,      setSort]      = useState('popularity');
+  const [vMode,     setVMode]     = useState('grid');
+  const [curTheme,  setCurTheme]  = useState('ocean');
+  const [darkMode,  setDarkMode]  = useState(true);
+  const [toasts,    setToasts]    = useState([]);
+  const [achPop,    setAchPop]    = useState(null);
+  const [profOpen,  setProfOpen]  = useState(false);
+  const [descCache, setDescCache] = useState({});
+  const [spotlight, setSpotlight] = useState(false);
+  const [mSearch,   setMSearch]   = useState(false);  // mobile full-screen search
+  const [filterOpen,setFilterOpen]= useState(false);
+  const [filters,   setFilters]   = useState({year:null,scoreMin:0,kind:'',status:''});
+  const [mousePos,  setMousePos]  = useState({x:0,y:0});
+
+  const fileRef = useRef(null);
+  const saveRef = useRef(null);
+  const theme   = THEMES[curTheme]??THEMES.ocean;
+
+  /* ── Mouse spotlight ── */
+  useEffect(()=>{
+    const h=e=>setMousePos({x:e.clientX,y:e.clientY});
+    window.addEventListener('mousemove',h,{passive:true});
+    return()=>window.removeEventListener('mousemove',h);
+  },[]);
+
+  /* ── Keyboard shortcuts ── */
+  useEffect(()=>{
+    const h=e=>{
+      if((e.ctrlKey||e.metaKey)&&e.key==='k'){e.preventDefault();setSpotlight(x=>!x);}
+      if(e.key==='Escape'){setSpotlight(false);setFilterOpen(false);setMSearch(false);}
+    };
+    window.addEventListener('keydown',h);
+    return()=>window.removeEventListener('keydown',h);
+  },[]);
+
+  /* ── CSS inject ── */
+  useEffect(()=>{
+    let el=document.getElementById('ahub-css');
+    if(!el){el=document.createElement('style');el.id='ahub-css';document.head.appendChild(el);}
+    el.textContent=buildCSS(theme.p,theme.s,theme.b,theme.m);
+    document.documentElement.style.setProperty('--base',theme.b);
+    document.body.style.background=theme.b;
+  },[curTheme,theme]);
+
+  /* ── Boot splash ── */
+  useEffect(()=>{ const t=setTimeout(()=>setBoot(false),1700); return()=>clearTimeout(t); },[]);
+
+  /* ── Toast ── */
+  const toast = useCallback((msg,type='success')=>{
+    const id=Date.now()+Math.random();
+    setToasts(p=>[...p.slice(-3),{id,msg,type}]);
+    setTimeout(()=>setToasts(p=>p.filter(t=>t.id!==id)),3800);
+  },[]);
+
+  /* ── XP ── */
+  const addXP = useCallback((amt,key)=>{
+    if(!isAuth) return;
+    const k=`${key}_${today()}`;
+    if(xpToday[k]) return;
+    setXpToday(p=>({...p,[k]:true}));
+    setUser(p=>({...p,xp:p.xp+amt}));
+  },[isAuth,xpToday]);
+
+  /* ── Achievement unlock ── */
+  const unlockAch = useCallback((id)=>{
+    if(!isAuth) return;
+    setAchs(prev=>{
+      if(prev.includes(id)) return prev;
+      const a=ACHS.find(x=>x.id===id); if(!a) return prev;
+      setUser(u=>({...u,xp:u.xp+a.xp}));
+      setAchPop(a); setTimeout(()=>setAchPop(null),4200);
+      return [...prev,id];
+    });
+  },[isAuth]);
+
+  /* ── Stats ── */
+  const stats = useMemo(()=>{
+    const lv   = Math.floor(user.xp/100)+1;
+    const libV = Object.values(library);
+    const watched  = libV.filter(a=>a.status==='completed').length;
+    const watching = libV.filter(a=>a.status==='watching').length;
+    const planned  = libV.filter(a=>a.status==='planned').length;
+    const rv   = Object.values(ratings);
+    const rated= rv.length;
+    const avg  = rated?(rv.reduce((a,b)=>a+b,0)/rated).toFixed(1):'—';
+    const notesCnt=Object.values(notes).filter(n=>n?.text).length;
+    const perf10=rv.filter(r=>r===10).length;
+    const genreSet=new Set(libV.filter(a=>a.status==='completed').flatMap(a=>a.genres?.map(g=>g.id)??[]));
+    return {level:lv,xpInLvl:user.xp%100,watched,watching,planned,rated,avgRating:avg,hours:Math.round(watched*4.5),notes:notesCnt,perf10,genres:genreSet.size,libSize:Object.keys(library).length};
+  },[user.xp,library,ratings,notes]);
+
+  /* ── Ach triggers ── */
+  useEffect(()=>{
+    if(!isAuth) return;
+    if(stats.watched>=1)    unlockAch('first');
+    if(stats.rated>=10)     unlockAch('rate10');
+    if(stats.watched>=50)   unlockAch('comp50');
+    if(stats.level>=10)     unlockAch('lv10');
+    if(favs.length>=20)     unlockAch('fav20');
+    if(stats.notes>=10)     unlockAch('notes10');
+    if(stats.libSize>=100)  unlockAch('lib100');
+    if(searchHist.length>=10) unlockAch('search10');
+    if(shareCount>=5)       unlockAch('share5');
+    if(stats.perf10>=10)    unlockAch('perf10');
+    if(stats.genres>=GENRES.length) unlockAch('genres');
+    const h=new Date().getHours();
+    if(h>=5&&h<7) unlockAch('early');
+    if(h<3)       unlockAch('night');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[stats,isAuth,favs.length,searchHist.length,shareCount]);
+
+  /* ═══════════════════════════════════════════════════════════════
+     SESSION — localStorage first (reload-safe), cloud fallback
+  ═══════════════════════════════════════════════════════════════ */
+  const applyUserData = useCallback((uname,accs)=>{
+    const ud=accs[uname]?.userData; if(!ud) return;
+    setUser(ud.user??mkUser(uname));
+    setLibrary(ud.library??{});
+    setHistD(ud.history??[]);
+    setRatings(ud.ratings??{});
+    setAchs(ud.achs??[]);
+    setFavs(ud.favs??[]);
+    setNotes(ud.notes??{});
+    setWl(ud.wl??[]);
+    setCurTheme(ud.theme??'ocean');
+    setDarkMode(ud.dark??true);
+    setDailyGoal(ud.dGoal??3);
+    setDailyProg(ud.dProg??0);
+    setSearchHist(ud.searchHist??[]);
+    setShareCount(ud.shareCount??0);
+    setIsAuth(true);
+    setCurAcc(uname);
+  },[]);
+
+  useEffect(()=>{
+    (async()=>{
+      // Load accounts
+      let accs={};
+      const lsRaw=LS.get(CLOUD_KEY);
+      if(lsRaw){ try{accs=JSON.parse(lsRaw);}catch{} }
+      try{
+        const cr=await CS.get(CLOUD_KEY);
+        if(cr){ const ca=JSON.parse(cr); accs=ca; LS.set(CLOUD_KEY,cr); }
+      }catch{}
+      setAccounts(accs);
+      // XP today
+      const td=today();
+      if(LS.get('ahub_xp_date')!==td){ setXpToday({}); LS.set('ahub_xp_date',td); }
+      else{ const s=LS.json('ahub_xp_today'); if(s) setXpToday(s); }
+      // Auto-login from localStorage (reload-safe)
+      const lsSess=LS.json(SESS_KEY);
+      const lsUser=LS.get(USER_KEY);
+      if(lsSess&&lsUser&&accs[lsUser]&&Date.now()-lsSess.ts<SESSION_TTL){
+        applyUserData(lsUser,accs); return;
+      }
+      // Cloud session fallback (cross-device)
+      try{
+        const cr=await CS.get(SESS_KEY);
+        const cu=await CS.get(USER_KEY);
+        if(cr&&cu){ const cs=JSON.parse(cr); if(accs[cu]&&Date.now()-cs.ts<SESSION_TTL){ LS.set(SESS_KEY,cr); LS.set(USER_KEY,cu); applyUserData(cu,accs); } }
+      }catch{}
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
+
+  /* ── Save ── */
+  const save = useCallback(async()=>{
+    if(!isAuth||!curAcc) return;
+    const payload={user,library,history:histD,ratings,achs,favs,notes,wl,theme:curTheme,dark:darkMode,dGoal:dailyGoal,dProg:dailyProg,searchHist:searchHist.slice(0,20),shareCount};
+    const upd={...accounts,[curAcc]:{...accounts[curAcc],userData:payload}};
+    setAccounts(upd);
+    const json=JSON.stringify(upd);
+    LS.set(CLOUD_KEY,json);
+    setSyncSt('syncing');
+    try{ await CS.set(CLOUD_KEY,json); setSyncSt('synced'); }
+    catch{ setSyncSt('error'); }
+    setTimeout(()=>setSyncSt('idle'),2200);
+  },[isAuth,curAcc,accounts,user,library,histD,ratings,achs,favs,notes,wl,curTheme,darkMode,dailyGoal,dailyProg,searchHist,shareCount]);
+
+  useEffect(()=>{
+    if(!isAuth||!curAcc) return;
+    clearTimeout(saveRef.current);
+    saveRef.current=setTimeout(save,SAVE_DELAY);
+    return()=>clearTimeout(saveRef.current);
+  },[user,library,histD,ratings,achs,favs,notes,wl,curTheme,darkMode,dailyGoal,dailyProg,isAuth,curAcc,save]);
+
+  /* ── Auth handlers ── */
+  const handleAuth = useCallback(async({u,p,rem})=>{
+    setAuthErr('');
+    if(!u||!p){ setAuthErr('Заполните все поля!'); return; }
+    if(authMode==='register'){
+      if(accounts[u])  { setAuthErr('Имя уже занято!'); return; }
+      if(u.length<3)   { setAuthErr('Имя: мин. 3 символа!'); return; }
+      if(p.length<6)   { setAuthErr('Пароль: мин. 6 символов!'); return; }
+      const newAcc={username:u,hash:hashPw(p),created:new Date().toISOString(),userData:{user:mkUser(u),library:{},history:[],ratings:{},achs:[],favs:[],notes:{},wl:[],theme:'ocean',dark:true,dGoal:3,dProg:0,searchHist:[],shareCount:0}};
+      const upd={...accounts,[u]:newAcc};
+      const json=JSON.stringify(upd);
+      LS.set(CLOUD_KEY,json); await CS.set(CLOUD_KEY,json);
+      setAccounts(upd); toast(`Добро пожаловать, ${u}! 🎉`);
+      setAuthMode('login'); setAuthErr(''); return;
+    }
+    const acc=accounts[u];
+    if(!acc)               { setAuthErr('Аккаунт не найден!'); return; }
+    if(acc.hash!==hashPw(p)){ setAuthErr('Неверный пароль!'); return; }
+    const now=new Date();
+    const last=acc.userData?.user?.lastLogin;
+    let streak=acc.userData?.user?.loginStreak??0;
+    if(last){ const d=Math.floor((+now-+new Date(last))/86400000); streak=d===1?streak+1:d>1?1:streak; } else streak=1;
+    const sessObj=JSON.stringify({token:genToken(),ts:Date.now()});
+    const updUser={...acc.userData.user,lastLogin:now.toISOString(),loginStreak:streak,totalLogins:(acc.userData.user.totalLogins??0)+1};
+    const upd={...accounts,[u]:{...acc,userData:{...acc.userData,user:updUser}}};
+    const json=JSON.stringify(upd);
+    LS.set(CLOUD_KEY,json); await CS.set(CLOUD_KEY,json);
+    setAccounts(upd);
+    // Session — always localStorage, cloud if remember
+    LS.set(SESS_KEY,sessObj); LS.set(USER_KEY,u);
+    if(rem){ await CS.set(SESS_KEY,sessObj); await CS.set(USER_KEY,u); }
+    applyUserData(u,upd);
+    setAuthOpen(false);
+    toast(`С возвращением, ${u}! 🎉`);
+    if(streak===7) setTimeout(()=>unlockAch('streak7'),900);
+  },[authMode,accounts,applyUserData,toast,unlockAch]);
+
+  const doLogout = useCallback(async()=>{
+    await save();
+    LS.del(SESS_KEY); LS.del(USER_KEY);
+    await CS.del(SESS_KEY); await CS.del(USER_KEY);
+    setIsAuth(false); setCurAcc(null);
+    setUser(mkUser()); setLibrary({}); setHistD([]); setRatings({});
+    setAchs([]); setFavs([]); setNotes({}); setWl([]);
+    setLogoutDlg(false); setProfOpen(false);
+    toast('До встречи! 👋','info');
+  },[save,toast]);
+
+  const doDelete = useCallback(()=>{
+    if(!window.confirm('Удалить аккаунт НАВСЕГДА?')) return;
+    if(!window.confirm('Все данные исчезнут!')) return;
+    const upd={...accounts}; delete upd[curAcc];
+    const json=JSON.stringify(upd);
+    LS.set(CLOUD_KEY,json); CS.set(CLOUD_KEY,json);
+    setAccounts(upd); doLogout();
+    toast('Аккаунт удалён','info');
+  },[accounts,curAcc,doLogout,toast]);
+
+  /* ── Content fetch ── */
+  const SKIP=useMemo(()=>new Set(['library','history','trending','favs','watchlist','stats']),[]);
+
+  useEffect(()=>{
+    if(SKIP.has(view)){ setLoading(false); return; }
+    let cancelled=false;
+    (async()=>{
+      setLoading(true);
+      try{
+        const ep=view==='manga'?'mangas':'animes';
+        let url=`${API}/${ep}?limit=${PER_PAGE}&page=${page}&order=${sort}`;
+        if(search) url+=`&search=${encodeURIComponent(search)}`;
+        if(genre)  url+=`&genre=${genre}`;
+        if(filters.year)    url+=`&season=${filters.year}`;
+        if(filters.kind)    url+=`&kind=${filters.kind}`;
+        if(filters.status)  url+=`&status=${filters.status}`;
+        if(filters.scoreMin)url+=`&score=${filters.scoreMin}`;
+        const [dataR,trendR]=await Promise.all([
+          fetch(url),
+          trendCache.length?null:fetch(`${API}/animes?limit=${TREND_PER}&page=1&order=popularity`),
+        ]);
+        if(cancelled) return;
+        const data=await dataR.json();
+        setContent(Array.isArray(data)?data:[]);
+        if(trendR){ const td=await trendR.json(); if(!cancelled) setTrendCache(Array.isArray(td)?td:[]); }
+      }catch{ if(!cancelled) toast('Ошибка загрузки','error'); }
+      finally{ if(!cancelled) setTimeout(()=>setLoading(false),80); }
+    })();
+    return()=>{cancelled=true;};
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[view,search,genre,page,sort,filters]);
+
+  /* ── Fetch full item desc ── */
+  useEffect(()=>{
+    if(!selItem?.id||selItem.description) return;
+    let cancelled=false;
+    const ep=selItem.kind==='manga'?'mangas':'animes';
+    fetch(`${API}/${ep}/${selItem.id}`).then(r=>r.json()).then(d=>{
+      if(cancelled) return;
+      const desc_text=stripHtml(d.description_html??d.description??'');
+      const enr={description:d.description_html??d.description??'',desc_text,genres:d.genres??[],episodes:d.episodes??selItem.episodes,status:d.status??selItem.status};
+      setSelItem(p=>p?{...p,...enr}:null);
+      setDescCache(c=>({...c,[selItem.id]:enr}));
+    }).catch(()=>{});
+    return()=>{cancelled=true;};
+  },[selItem?.id]);
+
+  /* ── Prefetch desc for list mode ── */
+  useEffect(()=>{
+    if(vMode!=='list') return;
+    const visible=displayData.slice(0,10);
+    visible.forEach(item=>{
+      if(descCache[item.id]) return;
+      fetch(`${API}/animes/${item.id}`).then(r=>r.json()).then(d=>{
+        const desc_text=stripHtml(d.description_html??d.description??'');
+        setDescCache(c=>({...c,[item.id]:{description:d.description_html??d.description??'',desc_text,genres:d.genres??[],episodes:d.episodes}}));
+      }).catch(()=>{});
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[vMode,page,view]);
+
+  /* ── Actions ── */
+  const openItem = useCallback((item)=>{
+    setSelItem(item);
+    setHistD(p=>[{...item,viewDate:new Date().toLocaleString('ru'),ts:Date.now()},...p.filter(h=>h.id!==item.id)].slice(0,120));
+    if(isAuth){
+      addXP(2,`view_${item.id}`);
+      const td=today();
+      if(LS.get('ahub_pd')!==td){ setDailyProg(1); LS.set('ahub_pd',td); }
+      else setDailyProg(p=>Math.min(p+1,dailyGoal));
+    }
+  },[isAuth,addXP,dailyGoal]);
+
+  const handleStatus=useCallback((item,status)=>{
+    if(!isAuth){ setAuthOpen(true); return; }
+    setLibrary(p=>{ const was=p[item.id]?.status; addXP(status==='completed'&&was!=='completed'?25:10,`lib_${item.id}_${status}`); return {...p,[item.id]:{...item,status,addedDate:new Date().toISOString(),genres:item.genres??[]}}; });
+    toast({watching:'👁 Смотрю',planned:'⏳ В планах',completed:'✅ Завершено'}[status]);
+  },[isAuth,addXP,toast]);
+
+  const handleRate=useCallback((item,score)=>{
+    if(!isAuth){ setAuthOpen(true); return; }
+    setRatings(p=>({...p,[item.id]:score}));
+    addXP(5,`rate_${item.id}`);
+    toast(`Оценка ${score}/10 ★`);
+  },[isAuth,addXP,toast]);
+
+  const handleFav=useCallback((item)=>{
+    if(!isAuth){ setAuthOpen(true); return; }
+    setFavs(p=>{ const has=p.some(f=>f.id===item.id); toast(has?'Убрано из избранного':'♥ В избранное',has?'info':'success'); if(!has) addXP(5,`fav_${item.id}`); return has?p.filter(f=>f.id!==item.id):[...p,{...item,favDate:new Date().toISOString()}]; });
+  },[isAuth,addXP,toast]);
+
+  const handleWL=useCallback((item)=>{
+    if(!isAuth){ setAuthOpen(true); return; }
+    setWl(p=>{ const has=p.some(w=>w.id===item.id); toast(has?'Убрано из списка':'+ В список',has?'info':'success'); if(!has) addXP(3,`wl_${item.id}`); return has?p.filter(w=>w.id!==item.id):[...p,{...item,wlDate:new Date().toISOString()}]; });
+  },[isAuth,addXP,toast]);
+
+  const handleNote=useCallback((id,text)=>{ if(!isAuth) return; setNotes(p=>({...p,[id]:{text,date:new Date().toISOString()}})); addXP(2,`note_${id}`); },[isAuth,addXP]);
+
+  const handleShare=useCallback((item)=>{
+    const url=`https://shikimori.one${item.url||''}`;
+    if(navigator.share) navigator.share({title:item.russian||item.name,url}).catch(()=>{});
+    else navigator.clipboard?.writeText(url).then(()=>toast('Ссылка скопирована 📋')).catch(()=>toast('Ошибка копирования','error'));
+    if(isAuth){ setShareCount(x=>x+1); addXP(2,`share_${item.id}`); }
+  },[isAuth,addXP,toast]);
+
+  const handleAvatar=useCallback((e)=>{
+    const f=e.target.files?.[0]; if(!f) return;
+    if(f.size>5e6){ toast('Файл слишком большой!','error'); return; }
+    const r=new FileReader();
+    r.onloadend=()=>{ setUser(p=>({...p,avatar:r.result})); toast('Аватар обновлён! 🖼'); };
+    r.readAsDataURL(f);
+  },[toast]);
+
+  const handleSearch=useCallback((v)=>{
+    setSearch(v); setPage(1);
+    if(v.trim()&&isAuth) setSearchHist(p=>[v,...p.filter(s=>s!==v)].slice(0,20));
+  },[isAuth]);
+
+  const randomAnime=useCallback(()=>{
+    const pool=content.length?content:trendCache;
+    if(!pool.length){ toast('Список пуст','info'); return; }
+    openItem(pool[Math.floor(Math.random()*pool.length)]);
+    toast('🎲 Случайное аниме!');
+  },[content,trendCache,openItem,toast]);
+
+  const doExport=useCallback(()=>{
+    if(!isAuth){ toast('Войдите!','warning'); return; }
+    const blob=new Blob([JSON.stringify({ver:VER,user,library,history:histD,ratings,achs,favs,notes,wl,theme:curTheme})],{type:'application/json'});
+    const a=Object.assign(document.createElement('a'),{href:URL.createObjectURL(blob),download:`anihub-${curAcc}-${Date.now()}.json`});
+    a.click(); URL.revokeObjectURL(a.href); toast('Экспортировано 💾');
+  },[isAuth,user,library,histD,ratings,achs,favs,notes,wl,curTheme,curAcc,toast]);
+
+  const doImport=useCallback((e)=>{
+    const f=e.target.files?.[0]; if(!f) return;
+    const r=new FileReader();
+    r.onload=ev=>{ try{ const d=JSON.parse(ev.target.result); if(d.user) setUser(d.user); if(d.library) setLibrary(d.library); if(d.history) setHistD(d.history); if(d.ratings) setRatings(d.ratings); if(d.achs) setAchs(d.achs); if(d.favs) setFavs(d.favs); if(d.notes) setNotes(d.notes); if(d.wl) setWl(d.wl); if(d.theme) setCurTheme(d.theme); toast('Импортировано ✅'); }catch{ toast('Ошибка импорта','error'); } };
+    r.readAsText(f);
+  },[toast]);
+
+  /* ── Display data ── */
+  const displayData = useMemo(()=>{
+    const m={library:Object.values(library),history:histD,trending:trendCache,favs,watchlist:wl};
+    return m[view]??content;
+  },[view,library,histD,trendCache,favs,wl,content]);
+
+  const favIds = useMemo(()=>new Set(favs.map(f=>f.id)),[favs]);
+  const wlIds  = useMemo(()=>new Set(wl.map(w=>w.id)),[wl]);
+  const hasFilters = filters.year||filters.scoreMin>0||filters.kind||filters.status;
+
+  const viewTitle={history:'⏱ История',library:'◈ Библиотека',manga:'📖 Манга',favs:'♥ Избранное',watchlist:'◎ Список',stats:'📊 Статистика'};
+  const gridCols = typeof window!=='undefined'?Math.max(Math.floor((window.innerWidth-248)/145),3):5;
+
+  /* ── Detail panel props ── */
+  const dpProps = useMemo(()=>({
+    lib:library,ratings,notes,favs:favIds,wl:wlIds,themeP:theme.p,themeS:theme.s,isAuth,
+    onStatus:handleStatus,onRate:handleRate,onNote:handleNote,onFav:handleFav,onWL:handleWL,onShare:handleShare,
+  }),[library,ratings,notes,favIds,wlIds,theme.p,theme.s,isAuth,handleStatus,handleRate,handleNote,handleFav,handleWL,handleShare]);
+
+  /* ══════════════════════════════════════════════════
+     BOOT SCREEN
+  ══════════════════════════════════════════════════ */
+  if(boot) return (
+    <div style={{position:'fixed',inset:0,background:theme.b,display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:24,fontFamily:'Outfit,system-ui,sans-serif'}}>
+      <div style={{position:'relative',width:96,height:96}}>
+        <div style={{position:'absolute',inset:0,borderRadius:28,background:`conic-gradient(${theme.p},${theme.s},#a855f7,${theme.p})`,animation:'spin 1.8s linear infinite'}}/>
+        <div style={{position:'absolute',inset:4,borderRadius:24,background:theme.b,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <span style={{fontSize:38,fontWeight:900,color:'white'}}>A</span>
+        </div>
+      </div>
+      <div style={{textAlign:'center'}}>
+        <p style={{fontSize:36,fontWeight:900,background:`linear-gradient(135deg,${theme.p},#a855f7,${theme.s})`,WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent',margin:'0 0 6px'}}>AniHub</p>
+        <p style={{fontSize:12,color:'rgba(255,255,255,.28)',fontWeight:600}}>Premium Anime Platform</p>
+      </div>
+      <div style={{display:'flex',gap:8}}>
+        {[0,1,2,3,4].map(i=><div key={i} style={{width:7,height:7,borderRadius:'50%',background:theme.p,animation:`float .85s ${i*.12}s ease-in-out infinite`}}/>)}
+      </div>
+    </div>
+  );
+
+  /* ══════════════════════════════════════════════════
+     MAIN APP RENDER
+  ══════════════════════════════════════════════════ */
+  return (
+    <div style={{minHeight:'100dvh',background:theme.b,color:'white',overflowX:'hidden',position:'relative'}}>
+      {/* Noise layer */}
+      <div className="noise-layer"/>
+      {/* Cursor glow */}
+      <div style={{position:'fixed',width:520,height:520,borderRadius:'50%',background:`radial-gradient(circle,${theme.p}0d 0%,transparent 70%)`,left:mousePos.x,top:mousePos.y,transform:'translate(-50%,-50%)',pointerEvents:'none',zIndex:0,transition:'left .08s,top .08s'}}/>
+
+      <Toasts items={toasts}/>
+
+      {/* Achievement popup */}
+      {achPop&&(
+        <div className="ap" style={{position:'fixed',bottom:88,right:14,zIndex:9700,maxWidth:280,width:'calc(100vw - 28px)'}}>
+          <div className="glass-dark" style={{borderRadius:20,padding:15,border:`1.5px solid ${theme.p}55`,boxShadow:`0 20px 60px rgba(0,0,0,.7)`}}>
+            <p style={{fontSize:10,fontWeight:900,opacity:.35,textTransform:'uppercase',letterSpacing:'.09em',marginBottom:10}}>🏆 Достижение!</p>
+            <div style={{display:'flex',alignItems:'center',gap:11}}>
+              <div style={{width:46,height:46,borderRadius:14,background:`linear-gradient(135deg,${theme.p},${theme.s})`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:22,flexShrink:0,boxShadow:`0 6px 20px ${theme.p}55`}}>{achPop.e}</div>
+              <div>
+                <p style={{fontSize:14,fontWeight:900,color:'white',marginBottom:2}}>{achPop.n}</p>
+                <p style={{fontSize:11,opacity:.45,marginBottom:4}}>{achPop.d}</p>
+                <p style={{fontSize:12,fontWeight:900,color:theme.p}}>+{achPop.xp} XP</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modals */}
+      {mSearch&&<SearchOverlay onClose={()=>setMSearch(false)} themeP={theme.p} themeS={theme.s} onOpen={openItem} history={searchHist} onClearHist={()=>setSearchHist([])}/>}
+      {spotlight&&<Spotlight onClose={()=>setSpotlight(false)} themeP={theme.p} themeS={theme.s} onOpen={openItem} history={searchHist} onClearHist={()=>setSearchHist([])}/>}
+      {filterOpen&&<FilterPanel filters={filters} onChange={setFilters} themeP={theme.p} themeS={theme.s} onClose={()=>setFilterOpen(false)}/>}
+      {selItem&&<ItemModal item={selItem} onClose={()=>setSelItem(null)} {...dpProps}/>}
+      {profOpen&&isAuth&&(
+        <ProfileSheet user={user} stats={stats} achs={achs} themeP={theme.p} themeS={theme.s} syncSt={syncSt} curTheme={curTheme} darkMode={darkMode} dailyGoal={dailyGoal}
+          onClose={()=>setProfOpen(false)} onSave={save} onLogout={()=>{setProfOpen(false);setLogoutDlg(true);}} onDelete={doDelete}
+          onExport={doExport} onImport={doImport} onAvatar={handleAvatar}
+          onUser={d=>setUser(p=>({...p,...d}))} onTheme={setCurTheme} onDark={setDarkMode} onDGoal={setDailyGoal} fileRef={fileRef}/>
+      )}
+      {/* Auth modal */}
+      {authOpen&&(
+        <div className="fi" style={{position:'fixed',inset:0,zIndex:9500,display:'flex',flexDirection:'column',justifyContent:'flex-end'}}>
+          <div style={{position:'absolute',inset:0,background:'rgba(0,0,0,.82)',backdropFilter:'blur(18px)'}} onClick={()=>{setAuthOpen(false);setAuthErr('');}}/>
+          <div className="glass-dark su prof-sheet" style={{position:'relative',borderRadius:'26px 26px 0 0',padding:'20px 20px 38px',boxShadow:'0 -24px 70px rgba(0,0,0,.75)'}}>
+            <div style={{display:'flex',justifyContent:'center',marginBottom:10}}><div style={{width:32,height:4,borderRadius:99,background:'rgba(255,255,255,.2)'}}/></div>
+            <div style={{display:'flex',alignItems:'center',gap:13,marginBottom:22}}>
+              <div style={{width:48,height:48,borderRadius:14,background:`linear-gradient(135deg,${theme.p},${theme.s})`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:22,boxShadow:`0 8px 22px ${theme.p}44`,flexShrink:0}}>{authMode==='login'?'🔐':'✨'}</div>
+              <div><p style={{fontSize:18,fontWeight:900,color:'white',marginBottom:2}}>{authMode==='login'?'Добро пожаловать':'Создать аккаунт'}</p><p style={{fontSize:12,opacity:.35}}>{authMode==='login'?'Войдите в аккаунт':'Начните путешествие'}</p></div>
+              <button onClick={()=>{setAuthOpen(false);setAuthErr('');}} style={{marginLeft:'auto',width:30,height:30,borderRadius:10,border:'none',background:'rgba(255,255,255,.08)',color:'rgba(255,255,255,.5)',cursor:'pointer',fontSize:14,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'inherit'}}>✕</button>
+            </div>
+            <AuthForm mode={authMode} onSubmit={handleAuth} themeP={theme.p} themeS={theme.s} error={authErr} onToggle={()=>{setAuthMode(m=>m==='login'?'register':'login');setAuthErr('');}}/>
+          </div>
+        </div>
+      )}
+      {logoutDlg&&(
+        <div className="fi" style={{position:'fixed',inset:0,zIndex:9600,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 20px',background:'rgba(0,0,0,.88)',backdropFilter:'blur(18px)'}}>
+          <div className="glass-dark si" style={{borderRadius:24,padding:'28px 24px',textAlign:'center',maxWidth:300,width:'100%'}}>
+            <div style={{width:56,height:56,borderRadius:18,margin:'0 auto 14px',background:'rgba(239,68,68,.12)',border:'1px solid rgba(239,68,68,.3)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:24}}>🚪</div>
+            <p style={{fontSize:18,fontWeight:900,marginBottom:7}}>Выйти?</p>
+            <p style={{fontSize:12,opacity:.35,marginBottom:22}}>Данные сохранены в облаке.</p>
+            <div style={{display:'flex',gap:10}}>
+              <button onClick={()=>setLogoutDlg(false)} className="btn-ghost" style={{flex:1,padding:12,borderRadius:13,fontSize:13}}>Отмена</button>
+              <button onClick={doLogout} className="btn-primary" style={{flex:1,padding:12,borderRadius:13,fontSize:13,background:'linear-gradient(135deg,#ef4444,#dc2626)',boxShadow:'0 8px 22px rgba(239,68,68,.4)'}}>Выйти</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ════════════════ HEADER ════════════════ */}
+      <header style={{position:'sticky',top:0,zIndex:700,background:`${theme.b}ee`,backdropFilter:'blur(24px) saturate(200%)',borderBottom:'1px solid rgba(255,255,255,.07)'}}>
+        <div style={{maxWidth:1700,margin:'0 auto',padding:'0 16px',height:56,display:'flex',alignItems:'center',gap:10}}>
+          {/* Logo */}
+          <div onClick={()=>{setView('home');setPage(1);setGenre(null);setSearch('');setFilters({year:null,scoreMin:0,kind:'',status:''}); }} style={{display:'flex',alignItems:'center',gap:9,cursor:'pointer',flexShrink:0,userSelect:'none'}} onMouseEnter={e=>e.currentTarget.querySelector('.logo-icon').style.transform='scale(1.1) rotate(-5deg)'} onMouseLeave={e=>e.currentTarget.querySelector('.logo-icon').style.transform='scale(1) rotate(0)'}>
+            <div className="logo-icon" style={{width:34,height:34,borderRadius:11,background:`linear-gradient(135deg,${theme.p},${theme.s})`,display:'flex',alignItems:'center',justifyContent:'center',boxShadow:`0 0 16px ${theme.p}55`,transition:'transform .3s cubic-bezier(.34,1.56,.64,1)',animation:'glow 3s ease infinite',flexShrink:0}}>
+              <span style={{fontSize:17,fontWeight:900,color:'white'}}>A</span>
+            </div>
+            <span className="logo-txt" style={{fontSize:19,fontWeight:900,background:`linear-gradient(135deg,${theme.p},white)`,WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>AniHub</span>
+          </div>
+
+          {/* Desktop nav */}
+          <nav className="d-nav" style={{gap:2,flexShrink:0}}>
+            {NAV.map(v=>(
+              <button key={v.k} onClick={()=>setView(v.k)} style={{padding:'6px 11px',borderRadius:10,border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:12,fontWeight:700,transition:'all .2s',whiteSpace:'nowrap',background:view===v.k?`${theme.p}1e`:'transparent',color:view===v.k?theme.p:'rgba(255,255,255,.38)',borderBottom:view===v.k?`2px solid ${theme.p}`:'2px solid transparent'}}>
+                {v.l}
+              </button>
+            ))}
+          </nav>
+
+          {/* Search bar — desktop click-to-open spotlight, mobile opens full overlay */}
+          <div className="search-bar" onClick={()=>{ if(window.innerWidth>=1024) setSpotlight(true); else setMSearch(true); }}
+            style={{flex:1,maxWidth:400,margin:'0 8px',cursor:'pointer',userSelect:'none'}}>
+            <div style={{display:'flex',alignItems:'center',gap:9,padding:'8px 13px',borderRadius:12,background:'rgba(255,255,255,.07)',border:'1.5px solid rgba(255,255,255,.09)',transition:'all .2s'}}
+              onMouseEnter={e=>e.currentTarget.style.borderColor=theme.p+'55'}
+              onMouseLeave={e=>e.currentTarget.style.borderColor='rgba(255,255,255,.09)'}>
+              <span style={{fontSize:14,opacity:.3}}>🔍</span>
+              <span style={{fontSize:13,fontWeight:600,color:'rgba(255,255,255,.28)',flex:1}}>{search||'Поиск аниме…'}</span>
+              <kbd className="desk" style={{fontSize:10,fontWeight:700,padding:'2px 7px',borderRadius:7,background:'rgba(255,255,255,.08)',color:'rgba(255,255,255,.28)',border:'1px solid rgba(255,255,255,.12)',flexShrink:0}}>Ctrl+K</kbd>
+            </div>
+          </div>
+
+          {/* Right actions */}
+          <div style={{display:'flex',alignItems:'center',gap:7,flexShrink:0,marginLeft:'auto'}}>
+            <button onClick={()=>setFilterOpen(true)} style={{width:35,height:35,borderRadius:11,border:`1px solid ${hasFilters?theme.p+'55':'rgba(255,255,255,.1)'}`,background:hasFilters?`${theme.p}18`:'rgba(255,255,255,.07)',cursor:'pointer',fontSize:14,display:'flex',alignItems:'center',justifyContent:'center',transition:'all .2s',color:hasFilters?theme.p:'rgba(255,255,255,.45)',position:'relative'}}>
+              ⚙
+              {hasFilters&&<div style={{position:'absolute',top:4,right:4,width:6,height:6,borderRadius:'50%',background:theme.p,boxShadow:`0 0 6px ${theme.p}`}}/>}
+            </button>
+            <button onClick={randomAnime} className="desk" style={{width:35,height:35,borderRadius:11,border:'1px solid rgba(255,255,255,.1)',background:'rgba(255,255,255,.07)',cursor:'pointer',fontSize:14,display:'flex',alignItems:'center',justifyContent:'center',transition:'all .2s',color:'rgba(255,255,255,.55)'}}
+              onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,.13)'}
+              onMouseLeave={e=>e.currentTarget.style.background='rgba(255,255,255,.07)'}>🎲</button>
+            {/* Sync indicator desktop */}
+            {isAuth&&<div className="desk" style={{alignItems:'center',gap:5,padding:'4px 9px',borderRadius:9,background:'rgba(255,255,255,.06)',fontSize:10,fontWeight:800,color:{idle:'rgba(255,255,255,.28)',syncing:theme.p,synced:'#22c55e',error:'#ef4444'}[syncSt]}}>
+              {syncSt==='syncing'?<Spinner size={10} color={theme.p}/>:<span style={{width:6,height:6,borderRadius:'50%',background:'currentColor',display:'inline-block'}}/>}
+              <span>{syncSt==='synced'?'Сохр.':syncSt==='syncing'?'…':syncSt==='error'?'ERR':'↑'}</span>
+            </div>}
+            {!isAuth?(
+              <button onClick={()=>setAuthOpen(true)} className="btn-primary" style={{padding:'8px 15px',borderRadius:12,fontSize:13,boxShadow:`0 4px 16px ${theme.p}44`}}>Войти</button>
+            ):(
+              <button onClick={()=>setProfOpen(true)} style={{position:'relative',background:'none',border:'none',padding:0,cursor:'pointer',flexShrink:0}}>
+                <img src={user.avatar} alt="" style={{width:35,height:35,borderRadius:11,objectFit:'cover',border:`2px solid ${theme.p}`,boxShadow:`0 0 12px ${theme.p}55`,display:'block',transition:'transform .2s'}}
+                  onMouseEnter={e=>e.target.style.transform='scale(1.1)'}
+                  onMouseLeave={e=>e.target.style.transform='scale(1)'}/>
+                {achs.length>0&&<div style={{position:'absolute',top:-5,right:-5,width:17,height:17,borderRadius:'50%',background:`linear-gradient(135deg,${theme.p},${theme.s})`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:8,color:'white',fontWeight:900,pointerEvents:'none'}}>{achs.length}</div>}
+              </button>
             )}
           </div>
         </div>
 
-        {/* Mobile Navigation */}
-        <div className="lg:hidden flex overflow-x-auto no-scrollbar gap-1 px-3 py-2 border-t border-white/5">
-          {[
-            { key: 'home', label: 'Главная', icon: '🏠' },
-            { key: 'manga', label: 'Манга', icon: '📚' },
-            { key: 'trending_list', label: 'Тренды', icon: '🔥' },
-            { key: 'favorites', label: 'Избранное', icon: '❤️' },
-            { key: 'collection', label: 'Коллекция', icon: '📁' },
-            { key: 'watchlist', label: 'Список', icon: '📋' },
-            { key: 'history', label: 'История', icon: '📜' }
-          ].map(m => (
-            <button
-              key={m.key}
-              onClick={() => setView(m.key)}
-              className={`text-[9px] font-black uppercase whitespace-nowrap px-3 py-1.5 rounded-lg transition-all ${
-                view === m.key ? 'text-white' : 'bg-white/5 opacity-60'
-              }`}
-              style={{
-                background: view === m.key ? `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})` : undefined
-              }}
-            >
-              {m.icon} {m.label}
+        {/* Mobile horizontal nav — ONE row, scrollable */}
+        <div className="ns m-nav" style={{overflowX:'auto',gap:5,padding:'5px 14px 8px',borderTop:'1px solid rgba(255,255,255,.06)'}}>
+          {NAV.map(v=>(
+            <button key={v.k} onClick={()=>setView(v.k)}
+              style={{flexShrink:0,display:'flex',alignItems:'center',gap:5,padding:'6px 12px',borderRadius:20,border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:12,fontWeight:800,transition:'all .2s',whiteSpace:'nowrap',background:view===v.k?`linear-gradient(135deg,${theme.p},${theme.s})`:'rgba(255,255,255,.07)',color:view===v.k?'white':'rgba(255,255,255,.38)',boxShadow:view===v.k?`0 4px 12px ${theme.p}44`:''}}>
+              <span style={{fontSize:12}}>{v.i}</span><span>{v.l}</span>
             </button>
           ))}
         </div>
       </header>
 
-      {/* Auth Modal */}
-      {showAuthModal && (
-        <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/95 backdrop-blur-3xl animate-fade-in">
-          <div className="relative w-full max-w-md glass-strong rounded-2xl p-6 border border-white/10">
-            <button 
-              onClick={() => { setShowAuthModal(false); setAuthError(''); }} 
-              className="absolute top-4 right-4 text-xl opacity-50 hover:opacity-100 transition-opacity"
-            >
-              ×
-            </button>
-            
-            <div className="flex items-center justify-center gap-3 mb-6">
-              <div className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl"
-                   style={{ background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})` }}>
-                {authMode === 'login' ? '🔐' : '✨'}
-              </div>
-              <h2 className="text-2xl font-black uppercase text-gradient">
-                {authMode === 'login' ? 'Вход' : 'Регистрация'}
-              </h2>
-            </div>
-
-            {authError && (
-              <div className="mb-4 p-3 rounded-xl bg-red-500/20 border-2 border-red-500 text-red-400 text-sm font-bold text-center animate-fade-in">
-                {authError}
-              </div>
-            )}
-
-            <AuthForm 
-              mode={authMode}
-              onLogin={handleLogin}
-              onRegister={handleRegister}
-              theme={theme}
-              isDarkMode={isDarkMode}
-              rememberMe={rememberMe}
-              setRememberMe={setRememberMe}
-              
-            />
-
-            <div className="mt-4 text-center">
-              <button
-                onClick={() => { setAuthMode(authMode === 'login' ? 'register' : 'login'); setAuthError(''); }}
-                className="text-xs opacity-70 hover:opacity-100 transition-opacity font-bold"
-                style={{ color: theme.secondary }}
-              >
-                {authMode === 'login' ? '✨ Нет аккаунта? Зарегистрируйтесь' : '🔐 Есть аккаунт? Войдите'}
-              </button>
-            </div>
-            
-            <div className="mt-4 p-3 glass rounded-xl text-center">
-              <p className="text-xs opacity-60">
-                Пользователей: <span className="font-black" style={{ color: theme.primary }}>{Object.keys(accounts).length}</span>
-              </p>
+      {/* ════════════════ TRENDING MARQUEE (home only) ════════════════ */}
+      {view==='home'&&!search&&page===1&&trendCache.length>0&&(
+        <section style={{overflow:'hidden',marginTop:6,marginBottom:4}}>
+          <div style={{maxWidth:1700,margin:'0 auto',padding:'0 16px 6px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <p style={{fontSize:12,fontWeight:900,opacity:.5}}>📈 В тренде</p>
+            <button onClick={()=>setView('trending')} style={{background:'none',border:'none',cursor:'pointer',color:theme.p,fontSize:12,fontWeight:800,fontFamily:'inherit',opacity:.75}}>Смотреть всё →</button>
+          </div>
+          <div>
+            <div style={{display:'flex',gap:9,paddingLeft:16,animation:'marquee 70s linear infinite',width:'max-content'}}
+              onMouseEnter={e=>e.currentTarget.style.animationPlayState='paused'}
+              onMouseLeave={e=>e.currentTarget.style.animationPlayState='running'}>
+              {[...trendCache,...trendCache].map((item,i)=>(
+                <div key={`m-${item.id}-${i}`} onClick={()=>openItem(item)} style={{flexShrink:0,width:90,cursor:'pointer'}}>
+                  <div style={{borderRadius:13,overflow:'hidden',aspectRatio:'2/3',background:'#0b1628',position:'relative',transition:'transform .3s',animation:`trendIn .4s ${Math.min(i*.02,.4)}s both`}}
+                    onMouseEnter={e=>e.currentTarget.style.transform='scale(1.08)'}
+                    onMouseLeave={e=>e.currentTarget.style.transform='scale(1)'}>
+                    {imgSrc(item)&&<img src={imgSrc(item)} alt="" loading="lazy" style={{width:'100%',height:'100%',objectFit:'cover',display:'block'}}/>}
+                    <div style={{position:'absolute',inset:0,background:'linear-gradient(to top,rgba(0,0,0,.9) 0%,transparent 55%)'}}/>
+                    <div style={{position:'absolute',top:5,left:5,padding:'2px 6px',borderRadius:7,fontSize:9,fontWeight:900,color:'white',background:`${theme.p}cc`}}>#{i%trendCache.length+1}</div>
+                    <div style={{position:'absolute',bottom:5,left:5,right:5}}>
+                      {item.score&&<span style={{fontSize:9,color:'#fbbf24',fontWeight:900}}>★{item.score}</span>}
+                      <p className="lc2" style={{fontSize:9,fontWeight:800,color:'white',lineHeight:1.2,marginTop:1}}>{item.russian||item.name}</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
-        </div>
+        </section>
       )}
 
- {/* Hero Trending Section - AUTO ROTATING */}
-{view === 'home' && !searchQuery && page === 1 && trending.length > 0 && (
-  <section className="mt-6 overflow-hidden py-6 animate-fade-in">
-    <div className="px-4 md:px-6 mb-4">
-      <h3 className="text-xl md:text-3xl font-black italic uppercase text-gradient">
-        🔥 В ТРЕНДЕ
-      </h3>
-    </div>
-    
-    <div className="relative">
-      <div className="animate-infinite-scroll flex gap-4" ref={scrollRef}>
-        {[...trending, ...trending].map((item, i) => (
-          <div 
-            key={`${item.id}-${i}`} 
-            onClick={() => { setSelectedItem(item); addToHistory(item); }} 
-            className="w-56 md:w-72 group cursor-pointer relative shrink-0 card-hover"
-          >
-            <div className="relative aspect-video rounded-xl overflow-hidden glass border-2 border-transparent group-hover:neon-border transition-all">
-              <img 
-                src={getImg(item)} 
-                className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" 
-                alt="" 
-              />
-              <div className="absolute inset-0 bg-gradient-to-t from-black via-black/50 to-transparent" />
-              
-              <div className="absolute bottom-3 left-3 right-3 z-10">
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="px-2 py-0.5 rounded-lg text-[9px] font-black uppercase text-white" 
-                        style={{ background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})` }}>
-                    #{i % 20 + 1}
-                  </span>
-                  <span className="px-2 py-0.5 rounded-lg bg-black/60 text-[9px] font-black text-yellow-400">
-                    ⭐ {item.score || '?'}
-                  </span>
-                </div>
-                <h4 className="text-xs md:text-sm font-black text-white truncate">
-                  {item.russian || item.name}
-                </h4>
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  </section>
-)}
+      {/* ════════════════ LAYOUT ════════════════ */}
+      <div style={{maxWidth:1700,margin:'0 auto',padding:'12px 16px',display:'flex',gap:14,alignItems:'flex-start',position:'relative',zIndex:2}} className="main-scroll">
 
-      {/* Main Content - Optimized */}
-      <div className="max-w-[1920px] mx-auto px-3 md:px-6 py-6 flex flex-col lg:flex-row gap-6">
-        {/* Sidebar - Compact */}
-        <aside className="w-full lg:w-64 shrink-0 space-y-4 animate-slide-in">
-          <div className="glass-strong p-4 rounded-2xl sticky top-20 border border-white/10">
-            <div className="flex items-center justify-between mb-4">
-              <p className="text-[9px] font-black uppercase opacity-50">Фильтры</p>
-              <button 
-                onClick={() => { setActiveGenre(null); setFilterYear(null); setSortBy('popularity'); }}
-                className="text-[9px] font-black uppercase opacity-50 hover:opacity-100"
-                style={{ color: theme.primary }}
-              >
-                Сбросить
-              </button>
-            </div>
-
-            <div className="mb-4">
-              <p className="text-[8px] font-black uppercase opacity-50 mb-2">Сортировка</p>
-              <div className="grid grid-cols-2 gap-1.5">
-                {[
-                  { value: 'popularity', label: 'Популярность', icon: '🔥' },
-                  { value: 'ranked', label: 'Рейтинг', icon: '⭐' },
-                  { value: 'aired_on', label: 'Дата', icon: '📅' },
-                  { value: 'name', label: 'Название', icon: '🔤' }
-                ].map(sort => (
-                  <button
-                    key={sort.value}
-                    onClick={() => setSortBy(sort.value)}
-                    className={`py-2 rounded-lg text-[8px] font-black uppercase transition-all ${
-                      sortBy === sort.value ? 'text-white' : 'bg-white/5 opacity-60'
-                    }`}
-                    style={{
-                      background: sortBy === sort.value ? `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})` : undefined
-                    }}
-                  >
-                    {sort.icon}
-                  </button>
-                ))}
-              </div>
-            </div>
-
+        {/* Sidebar */}
+        <aside className="sidebar" style={{width:208,flexShrink:0,position:'sticky',top:120}}>
+          <div className="card" style={{borderRadius:20,padding:14,display:'flex',flexDirection:'column',gap:13}}>
+            {/* Sort */}
             <div>
-              <p className="text-[8px] font-black uppercase opacity-50 mb-2">Жанры</p>
-              <div className="space-y-1.5 max-h-60 overflow-y-auto no-scrollbar">
-                <button 
-                  onClick={() => setActiveGenre(null)} 
-                  className={`w-full py-2 rounded-lg text-[9px] font-black uppercase transition-all ${
-                    !activeGenre ? 'text-white' : 'bg-white/5 opacity-60'
-                  }`}
-                  style={{
-                    background: !activeGenre ? `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})` : undefined
-                  }}
-                >
-                  🧩 Все
-                </button>
-                
-                {GENRES.map(g => (
-                  <button 
-                    key={g.id} 
-                    onClick={() => setActiveGenre(g.id)} 
-                    className={`w-full py-2 rounded-lg text-[9px] font-black uppercase transition-all ${
-                      activeGenre === g.id ? 'text-white' : 'bg-white/5 opacity-60'
-                    }`}
-                    style={{
-                      background: activeGenre === g.id ? `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})` : undefined
-                    }}
-                  >
-                    {g.icon} {g.name}
+              <p style={{fontSize:9,fontWeight:900,opacity:.3,textTransform:'uppercase',letterSpacing:'.1em',marginBottom:8}}>Сортировка</p>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:5}}>
+                {SORTS.map(({v,l})=>(
+                  <button key={v} onClick={()=>setSort(v)} style={{padding:'7px 4px',borderRadius:10,border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:10,fontWeight:800,transition:'all .2s',background:sort===v?`linear-gradient(135deg,${theme.p},${theme.s})`:'rgba(255,255,255,.07)',color:sort===v?'white':'rgba(255,255,255,.38)',boxShadow:sort===v?`0 4px 12px ${theme.p}44`:''}}>{l}</button>
+                ))}
+              </div>
+            </div>
+            {/* Genres */}
+            <div>
+              <p style={{fontSize:9,fontWeight:900,opacity:.3,textTransform:'uppercase',letterSpacing:'.1em',marginBottom:8}}>Жанры</p>
+              <div className="ns" style={{display:'flex',flexDirection:'column',gap:3,maxHeight:310,overflowY:'auto'}}>
+                <button onClick={()=>setGenre(null)} style={{padding:'7px 10px',borderRadius:10,border:`1px solid ${!genre?theme.p+'44':'transparent'}`,cursor:'pointer',fontFamily:'inherit',fontSize:11,fontWeight:800,transition:'all .2s',background:!genre?`${theme.p}18`:'rgba(255,255,255,.05)',color:!genre?theme.p:'rgba(255,255,255,.38)',textAlign:'left'}}>🧩 Все жанры</button>
+                {GENRES.map(g=>(
+                  <button key={g.id} onClick={()=>setGenre(g.id)} style={{padding:'7px 10px',borderRadius:10,border:`1px solid ${genre===g.id?theme.p+'44':'transparent'}`,cursor:'pointer',fontFamily:'inherit',fontSize:11,fontWeight:800,transition:'all .2s',background:genre===g.id?`${theme.p}18`:'rgba(255,255,255,.05)',color:genre===g.id?theme.p:'rgba(255,255,255,.38)',textAlign:'left',display:'flex',alignItems:'center',gap:7}}>
+                    <span>{g.e}</span><span>{g.n}</span>
                   </button>
                 ))}
               </div>
             </div>
-
-            {isLoggedIn && (
-              <div className="mt-4 p-3 glass rounded-xl">
-                <p className="text-[9px] font-black uppercase mb-2 opacity-50">Статистика</p>
-                <div className="space-y-1 text-[10px]">
-                  <div className="flex justify-between">
-                    <span className="opacity-70">Уровень:</span>
-                    <span className="font-black" style={{ color: theme.primary }}>{userStats.level}</span>
+            {/* Mini user stats */}
+            {isAuth&&(
+              <div style={{padding:12,borderRadius:14,background:`${theme.p}0d`,border:`1px solid ${theme.p}22`}}>
+                <p style={{fontSize:9,fontWeight:900,opacity:.35,textTransform:'uppercase',letterSpacing:'.1em',marginBottom:8}}>Мой прогресс</p>
+                <div style={{display:'flex',flexDirection:'column',gap:5}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                    <span style={{fontSize:11,opacity:.45,fontWeight:700}}>Ур.</span>
+                    <span style={{fontSize:15,fontWeight:900,color:theme.p}}>{stats.level}</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="opacity-70">XP:</span>
-                    <span className="font-black" style={{ color: theme.secondary }}>{userStats.totalXp}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="opacity-70">Завершено:</span>
-                    <span className="font-black">{userStats.totalWatched}</span>
-                  </div>
+                  <Bar value={stats.xpInLvl} max={100} grad={`linear-gradient(90deg,${theme.p},${theme.s})`} h={4}/>
+                  {[['Завершено',stats.watched],['Оценено',stats.rated],['Избранное',favs.length]].map(([l,v])=>(
+                    <div key={l} style={{display:'flex',justifyContent:'space-between'}}>
+                      <span style={{fontSize:10,opacity:.35,fontWeight:700}}>{l}</span>
+                      <span style={{fontSize:11,fontWeight:900,color:'white'}}>{v}</span>
+                    </div>
+                  ))}
+                  {dailyProg>0&&(
+                    <div style={{marginTop:3}}>
+                      <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+                        <span style={{fontSize:10,opacity:.35,fontWeight:700}}>Цель дня</span>
+                        <span style={{fontSize:10,fontWeight:900,color:dailyProg>=dailyGoal?'#22c55e':theme.p}}>{dailyProg}/{dailyGoal}</span>
+                      </div>
+                      <Bar value={dailyProg} max={dailyGoal} grad={`linear-gradient(90deg,${dailyProg>=dailyGoal?'#22c55e':theme.p},${theme.s})`} h={4}/>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
+            <button onClick={()=>{setGenre(null);setSort('popularity');setFilters({year:null,scoreMin:0,kind:'',status:''});}} style={{padding:6,borderRadius:10,border:'none',background:'transparent',color:'rgba(255,255,255,.2)',cursor:'pointer',fontSize:11,fontWeight:700,fontFamily:'inherit'}}>↺ Сбросить</button>
           </div>
         </aside>
 
-        {/* Main Content Grid */}
-        <main className="flex-1 animate-fade-in">
-          <div className="flex flex-col md:flex-row items-center justify-between mb-6 gap-4">
-            <div>
-              <h2 className="text-2xl md:text-4xl font-black italic uppercase tracking-tighter text-gradient">
-                {view === 'history' ? '📜 История' : 
-                 view === 'collection' ? '📁 Коллекция' : 
-                 view === 'manga' ? '📚 Манга' : 
-                 view === 'trending_list' ? '🔥 Тренды' : 
-                 view === 'favorites' ? '❤️ Избранное' : 
-                 view === 'watchlist' ? '📋 Список просмотра' :
-                 '🎬 Каталог'}
-              </h2>
-              <p className="text-xs opacity-60">
-                <span className="font-black" style={{ color: theme.primary }}>{finalContent.length}</span> результатов
-              </p>
-            </div>
+        {/* Main */}
+        <main style={{flex:1,minWidth:0}}>
 
-            <div className="flex items-center gap-2">
-              <div className="flex gap-1 glass p-1 rounded-lg">
-                <button
-                  onClick={() => setViewMode('grid')}
-                  className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase transition-all ${
-                    viewMode === 'grid' ? 'text-white' : 'opacity-60'
-                  }`}
-                  style={{
-                    background: viewMode === 'grid' ? `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})` : undefined
-                  }}
-                >
-                  ⊞
-                </button>
-                <button
-                  onClick={() => setViewMode('list')}
-                  className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase transition-all ${
-                    viewMode === 'list' ? 'text-white' : 'opacity-60'
-                  }`}
-                  style={{
-                    background: viewMode === 'list' ? `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})` : undefined
-                  }}
-                >
-                  ☰
-                </button>
+          {/* TRENDING PAGE */}
+          {view==='trending'&&<TrendingPage themeP={theme.p} themeS={theme.s} onOpen={openItem} onFav={handleFav} favIds={favIds} cache={descCache} library={library}/>}
+
+          {/* STATS PAGE */}
+          {view==='stats'&&<StatsPage stats={stats} user={user} lib={library} ratings={ratings} favs={favs.length} achs={achs} themeP={theme.p} themeS={theme.s}/>}
+
+          {/* ALL OTHER VIEWS */}
+          {view!=='trending'&&view!=='stats'&&(
+            <>
+              {/* Toolbar */}
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:13,gap:8,flexWrap:'wrap'}}>
+                <div>
+                  <h1 style={{fontSize:20,fontWeight:900,margin:'0 0 2px'}}>{viewTitle[view]??'⊞ Каталог'}</h1>
+                  <p style={{fontSize:11,fontWeight:700,color:'rgba(255,255,255,.3)',margin:0}}>
+                    <span style={{color:theme.p,fontWeight:900}}>{displayData.length}</span> {view==='manga'?'манг':'аниме'}
+                    {hasFilters&&<span style={{color:'#f59e0b',marginLeft:8}}>· Фильтры</span>}
+                  </p>
+                </div>
+                <div style={{display:'flex',alignItems:'center',gap:7,flexWrap:'wrap'}}>
+                  {/* Mobile genres strip */}
+                  <div className="ns mob-genres" style={{display:'flex',overflowX:'auto',gap:5,maxWidth:180}}>
+                    <button onClick={()=>setGenre(null)} style={{flexShrink:0,padding:'5px 10px',borderRadius:99,border:`1px solid ${!genre?theme.p+'55':'rgba(255,255,255,.1)'}`,background:!genre?`${theme.p}18`:'rgba(255,255,255,.06)',color:!genre?theme.p:'rgba(255,255,255,.38)',cursor:'pointer',fontSize:11,fontWeight:800,fontFamily:'inherit',whiteSpace:'nowrap'}}>Все</button>
+                    {GENRES.slice(0,6).map(g=>(
+                      <button key={g.id} onClick={()=>setGenre(g.id)} style={{flexShrink:0,padding:'5px 10px',borderRadius:99,border:`1px solid ${genre===g.id?theme.p+'55':'rgba(255,255,255,.1)'}`,background:genre===g.id?`${theme.p}18`:'rgba(255,255,255,.06)',color:genre===g.id?theme.p:'rgba(255,255,255,.38)',cursor:'pointer',fontSize:11,fontWeight:800,fontFamily:'inherit',whiteSpace:'nowrap'}}>{g.e}</button>
+                    ))}
+                  </div>
+                  {/* View mode */}
+                  <div style={{display:'flex',borderRadius:11,overflow:'hidden',border:'1px solid rgba(255,255,255,.1)',flexShrink:0}}>
+                    {[['grid','⊞'],['list','☰']].map(([m,i])=>(
+                      <button key={m} onClick={()=>setVMode(m)} style={{width:35,height:33,border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:14,fontWeight:900,transition:'all .2s',background:vMode===m?`linear-gradient(135deg,${theme.p},${theme.s})`:'rgba(255,255,255,.07)',color:vMode===m?'white':'rgba(255,255,255,.38)'}}>{i}</button>
+                    ))}
+                  </div>
+                  {/* Pagination */}
+                  {['home','manga'].includes(view)&&(
+                    <div style={{display:'flex',alignItems:'center',borderRadius:11,overflow:'hidden',border:'1px solid rgba(255,255,255,.1)',flexShrink:0}}>
+                      <button onClick={()=>setPage(p=>Math.max(1,p-1))} disabled={page===1} style={{width:33,height:33,border:'none',background:'rgba(255,255,255,.07)',color:'rgba(255,255,255,.55)',cursor:page===1?'not-allowed':'pointer',fontSize:15,fontWeight:900,opacity:page===1?.3:1}}>‹</button>
+                      <span style={{width:30,textAlign:'center',fontSize:12,fontWeight:900,color:theme.p,background:'rgba(255,255,255,.04)'}}>{page}</span>
+                      <button onClick={()=>setPage(p=>p+1)} style={{width:33,height:33,border:'none',background:'rgba(255,255,255,.07)',color:'rgba(255,255,255,.55)',cursor:'pointer',fontSize:15,fontWeight:900}}>›</button>
+                    </div>
+                  )}
+                </div>
               </div>
 
-              {['home', 'manga', 'top'].includes(view) && (
-                <div className="flex items-center gap-2 glass p-1 rounded-lg">
-                  <button 
-                    onClick={() => setPage(p => Math.max(1, p - 1))} 
-                    className="w-8 h-8 rounded-lg glass flex items-center justify-center text-lg hover:scale-110 transition-all"
-                    style={{ color: theme.primary }}
-                    disabled={page === 1}
-                  >
-                    ‹
-                  </button>
-                  <div 
-                    className="w-8 h-8 rounded-lg flex items-center justify-center font-black text-sm text-white"
-                    style={{
-                      background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`
-                    }}
-                  >
-                    {page}
-                  </div>
-                  <button 
-                    onClick={() => setPage(p => p + 1)} 
-                    className="w-8 h-8 rounded-lg glass flex items-center justify-center text-lg hover:scale-110 transition-all"
-                    style={{ color: theme.primary }}
-                  >
-                    ›
-                  </button>
+              {/* Content */}
+              {loading ? (
+                <div style={{display:vMode==='grid'?'grid':'flex',gridTemplateColumns:vMode==='grid'?'repeat(auto-fill,minmax(134px,1fr))':undefined,flexDirection:'column',gap:vMode==='grid'?10:8}} className={vMode==='grid'?'card-grid':''}>
+                  {Array(vMode==='grid'?20:8).fill(0).map((_,i)=>
+                    vMode==='grid'?<SkeletonCard key={i}/>:
+                    <div key={i} style={{height:80,borderRadius:14,background:'#0b1628',position:'relative',overflow:'hidden'}}><div className="shimmer" style={{position:'absolute',inset:0}}/></div>
+                  )}
+                </div>
+              ):displayData.length===0?(
+                <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'64px 20px',gap:14}}>
+                  <span style={{fontSize:56,animation:'float 3s ease infinite'}}>📭</span>
+                  <p style={{fontSize:16,fontWeight:900,opacity:.35}}>Ничего не найдено</p>
+                  <p style={{fontSize:12,opacity:.2}}>Измените параметры</p>
+                  {hasFilters&&<button onClick={()=>setFilters({year:null,scoreMin:0,kind:'',status:''})} className="btn-ghost" style={{marginTop:4,padding:'9px 18px',borderRadius:12,fontSize:13}}>Сбросить фильтры</button>}
+                </div>
+              ):vMode==='grid'?(
+                <div className="card-grid stagger">
+                  {displayData.map((item,idx)=>(
+                    <div key={`${item.id}-${idx}`} style={{animation:`fadeUp .32s ${Math.min(idx*.025,.4)}s both`}}>
+                      <AnimeCard item={item} onClick={openItem} onFav={handleFav}
+                        faved={favIds.has(item.id)} status={library[item.id]?.status}
+                        userRating={ratings[item.id]} themeP={theme.p} themeS={theme.s}
+                        cache={descCache} colIdx={idx%gridCols} cols={gridCols}/>
+                    </div>
+                  ))}
+                </div>
+              ):(
+                <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                  {displayData.map((item,idx)=>(
+                    <div key={`${item.id}-${idx}`} style={{animation:`fadeUp .3s ${Math.min(idx*.022,.33)}s both`}}>
+                      <AnimeRow item={item} onClick={openItem} onFav={handleFav} faved={favIds.has(item.id)} themeP={theme.p} themeS={theme.s} cache={descCache}/>
+                    </div>
+                  ))}
                 </div>
               )}
-            </div>
-          </div>
-
-          {loading ? (
-            <div className={viewMode === 'grid' 
-              ? "grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3" 
-              : "space-y-3"
-            }>
-              {[...Array(10)].map((_, i) => (
-                <div 
-                  key={i} 
-                  className={viewMode === 'grid'
-                    ? "aspect-[3/4.5] rounded-xl glass animate-pulse"
-                    : "h-24 rounded-xl glass animate-pulse"
-                  } 
-                />
-              ))}
-            </div>
-          ) : viewMode === 'grid' ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-              {finalContent.map((item, idx) => (
-                <div 
-                  key={`${item.id}-${idx}`} 
-                  onClick={() => { setSelectedItem(item); addToHistory(item); }} 
-                  className="group relative cursor-pointer animate-fade-in card-hover"
-                  style={{ animationDelay: `${idx * 0.03}s` }}
-                >
-                  <div className="relative aspect-[3/4.5] rounded-xl overflow-hidden glass border-2 border-transparent group-hover:neon-border transition-all bg-black">
-                    
-                    {getStatusLabel(item.id) && (
-                      <div className="absolute top-2 left-2 z-30 px-2 py-1 rounded-lg font-black text-[8px] uppercase text-white glass-strong">
-                        {getStatusLabel(item.id)}
-                      </div>
-                    )}
-
-                    {ratings[item.id] && (
-                      <div 
-                        className="absolute top-2 right-2 z-30 px-2 py-1 rounded-lg font-black text-[8px] uppercase text-white"
-                        style={{
-                          background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`
-                        }}
-                      >
-                        ⭐ {ratings[item.id]}
-                      </div>
-                    )}
-
-                    <button
-                      onClick={(e) => { e.stopPropagation(); toggleFavorite(item); }}
-                      className="absolute bottom-2 right-2 z-30 w-8 h-8 rounded-full glass flex items-center justify-center hover:scale-110 transition-all"
-                    >
-                      <span className="text-lg">
-                        {favorites.find(f => f.id === item.id) ? '❤️' : '🤍'}
-                      </span>
-                    </button>
-
-                    <img 
-                      src={getImg(item)} 
-                      className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110 group-hover:opacity-30" 
-                      alt="" 
-                      loading="lazy"
-                    />
-
-                    <div className="absolute inset-0 z-20 flex flex-col items-center justify-center p-3 opacity-0 group-hover:opacity-100 transition-all duration-500 bg-black/60 backdrop-blur-md">
-                      <div className="translate-y-4 group-hover:translate-y-0 transition-transform duration-500 text-center">
-                        <div 
-                          className="w-12 h-12 rounded-full flex items-center justify-center mb-2 mx-auto"
-                          style={{
-                            background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`
-                          }}
-                        >
-                          <span className="text-white text-xl">▶</span>
-                        </div>
-                        <p className="text-white text-xs font-black uppercase">
-                          Смотреть
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="absolute inset-0 bg-gradient-to-t from-black via-black/50 to-transparent z-10 group-hover:opacity-0 transition-opacity" />
-                    <div className="absolute bottom-3 left-3 right-3 z-10 group-hover:opacity-0 transition-opacity">
-                      <h3 className="font-black text-[10px] uppercase leading-tight line-clamp-2 text-white neon-text">
-                        {item.russian || item.name}
-                      </h3>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {finalContent.map((item, idx) => (
-                <div
-                  key={`${item.id}-${idx}`}
-                  onClick={() => { setSelectedItem(item); addToHistory(item); }}
-                  className="flex gap-3 glass-strong p-3 rounded-xl border border-white/10 hover:scale-[1.01] transition-all cursor-pointer animate-fade-in"
-                  style={{ animationDelay: `${idx * 0.03}s` }}
-                >
-                  <img
-                    src={getImg(item)}
-                    className="w-16 h-24 object-cover rounded-lg"
-                    alt=""
-                    loading="lazy"
-                  />
-                  <div className="flex-1">
-                    <h3 className="text-sm font-black mb-1 neon-text line-clamp-1">
-                      {item.russian || item.name}
-                    </h3>
-                    <div className="flex flex-wrap gap-1 mb-1">
-                      <span className="px-2 py-0.5 rounded-lg bg-white/10 text-[9px] font-black">
-                        {item.kind}
-                      </span>
-                      {item.score && (
-                        <span className="px-2 py-0.5 rounded-lg bg-yellow-500/20 text-[9px] font-black text-yellow-400">
-                          ⭐ {item.score}
-                        </span>
-                      )}
-                    </div>
-                    {getStatusLabel(item.id) && (
-                      <span 
-                        className="inline-block px-2 py-0.5 rounded-lg text-[9px] font-black text-white"
-                        style={{
-                          background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`
-                        }}
-                      >
-                        {getStatusLabel(item.id)}
-                      </span>
-                    )}
-                  </div>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); toggleFavorite(item); }}
-                    className="flex items-center justify-center w-10 h-10 rounded-lg glass hover:scale-110 transition-all"
-                  >
-                    <span className="text-xl">
-                      {favorites.find(f => f.id === item.id) ? '❤️' : '🤍'}
-                    </span>
-                  </button>
-                </div>
-              ))}
-            </div>
+            </>
           )}
         </main>
       </div>
 
-      {/* Modal Player - Compact version */}
-      {selectedItem && (
-        <div className="fixed inset-0 z-[9999] bg-black/95 backdrop-blur-xl flex flex-col animate-fade-in">
-          <div className="relative z-[100] h-14 px-4 flex items-center justify-between glass-strong border-b border-white/10">
-            <div className="flex items-center gap-3">
-              <button 
-                onClick={() => setSelectedItem(null)} 
-                className="w-8 h-8 rounded-lg glass hover:scale-110 text-white flex items-center justify-center transition-all text-lg"
-              >
-                ←
-              </button>
-              <h3 className="text-white font-black uppercase text-xs truncate max-w-[200px] md:max-w-2xl">
-                {selectedItem.russian || selectedItem.name}
-              </h3>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={(e) => { e.stopPropagation(); toggleFavorite(selectedItem); }}
-                className="w-8 h-8 rounded-lg glass hover:scale-110 transition-all flex items-center justify-center"
-              >
-                <span className="text-lg">
-                  {favorites.find(f => f.id === selectedItem.id) ? '❤️' : '🤍'}
-                </span>
-              </button>
-              <button 
-                onClick={() => setSelectedItem(null)} 
-                className="w-8 h-8 rounded-lg glass hover:bg-red-500 text-white flex items-center justify-center text-lg transition-all"
-              >
-                ×
-              </button>
-            </div>
-          </div>
+   {/* ————————————————— MOBILE BOTTOM NAV (Hidden on PC) ————————————————— */}
+<nav 
+  className="fixed bottom-0 left-0 right-0 z-[600] flex justify-center border-t border-white/10 px-1 backdrop-blur-2xl saturate-200 md:hidden" 
+  style={{ 
+    background: `${theme.b}f5`, 
+    paddingBottom: 'env(safe-area-inset-bottom, 0px)' 
+  }}
+>
+  <div className="flex w-full max-w-md items-center justify-around py-2">
+    {[
+      { k: 'home', l: 'Главная', i: '⊞' },
+      { k: 'trending', l: 'Тренды', i: '📈' },
+      { k: 'favs', l: 'Избранное', i: '♥' },
+      { k: 'library', l: 'Моё', i: '◈' },
+      { k: 'stats', l: 'Статы', i: '📊' },
+    ].map((v) => (
+      <button
+        key={v.k}
+        onClick={() => setView(v.k)}
+        className={`flex flex-1 flex-col items-center gap-0.5 rounded-xl py-1 transition-all duration-200 active:scale-90 
+          ${view === v.k ? '' : 'text-white/30'}`}
+        style={{ 
+          backgroundColor: view === v.k ? `${theme.p}1e` : 'transparent',
+          color: view === v.k ? theme.p : undefined 
+        }}
+      >
+        <span className="text-[18px]">{v.i}</span>
+        <span className="text-[9px] font-extrabold uppercase tracking-tight">{v.l}</span>
+      </button>
+    ))}
 
-          <div className="relative z-10 flex-1 flex flex-col lg:flex-row overflow-hidden">
-            <div className="w-full lg:w-80 overflow-y-auto glass-strong border-r border-white/10 p-4 no-scrollbar order-2 lg:order-1">
-              <div className="grid grid-cols-2 gap-2 mb-4">
-                {[
-                  { label: 'Рейтинг', value: `${selectedItem.score || '0.0'} ★`, color: 'text-yellow-400' },
-                  { label: 'Формат', value: selectedItem.kind, color: 'text-cyan-400' },
-                  { label: 'Год', value: selectedItem.aired_on?.split('-')[0] || 'N/A', color: 'text-white' },
-                  { label: 'Статус', value: selectedItem.status || 'N/A', color: 'text-green-400' }
-                ].map((info, i) => (
-                  <div key={i} className="bg-white/5 p-2 rounded-lg">
-                    <p className="text-white/20 text-[7px] font-black uppercase">{info.label}</p>
-                    <p className={`text-[10px] font-black ${info.color}`}>{info.value}</p>
-                  </div>
-                ))}
-              </div>
+    {isAuth ? (
+      <button
+        onClick={() => setProfOpen(true)}
+        className="flex flex-1 flex-col items-center gap-0.5 rounded-xl py-1 transition-all duration-200 active:scale-90"
+      >
+        <img
+          src={user.avatar}
+          alt="Avatar"
+          className="h-[22px] w-[22px] rounded-lg object-cover"
+          style={{ border: `1.5px solid ${theme.p}` }}
+        />
+        <span className="text-[9px] font-extrabold text-white/30 uppercase tracking-tight">Профиль</span>
+      </button>
+    ) : (
+      <button
+        onClick={() => setAuthOpen(true)}
+        className="flex flex-1 flex-col items-center gap-0.5 rounded-xl py-1 transition-all duration-200 active:scale-90"
+        style={{ backgroundColor: `${theme.p}1e`, color: theme.p }}
+      >
+        <span className="text-[18px]">◉</span>
+        <span className="text-[9px] font-extrabold uppercase tracking-tight">Войти</span>
+      </button>
+    )}
+  </div>
+</nav>
 
-              <div className="space-y-1.5 mb-4">
-                <p className="text-[8px] font-black text-white/30 uppercase">Статус</p>
-                <div className="flex flex-col gap-1.5">
-                  {[
-                    { key: 'watching', label: '👁️ Смотрю' },
-                    { key: 'planned', label: '⏳ В планах' },
-                    { key: 'completed', label: '✅ Завершено' }
-                  ].map(st => (
-                    <button 
-                      key={st.key} 
-                      onClick={() => updateLibraryStatus(selectedItem, st.key)} 
-                      className={`w-full py-2 rounded-lg font-black uppercase text-[8px] transition-all ${
-                        library[selectedItem.id]?.status === st.key ? 'text-white' : 'bg-white/5 text-white/40'
-                      }`}
-                      style={{
-                        background: library[selectedItem.id]?.status === st.key ? `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})` : undefined
-                      }}
-                    >
-                      {st.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="space-y-2 mb-4">
-                <h4 className="text-white/20 font-black uppercase text-[8px]">Оценка</h4>
-                <div className="grid grid-cols-5 gap-1">
-                  {[1,2,3,4,5,6,7,8,9,10].map(score => (
-                    <button 
-                      key={score} 
-                      onClick={() => handleRating(selectedItem, score)} 
-                      className={`aspect-square rounded-lg font-black text-[10px] transition-all ${
-                        ratings[selectedItem.id] === score ? 'text-white scale-110' : 'bg-white/5 text-white/30'
-                      }`}
-                      style={{
-                        background: ratings[selectedItem.id] === score ? `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})` : undefined
-                      }}
-                    >
-                      {score}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {isLoggedIn && (
-                <div className="space-y-2 mb-4">
-                  <h4 className="text-white/20 font-black uppercase text-[8px]">Заметки</h4>
-                  <textarea
-                    placeholder="Ваши мысли..."
-                    value={notes[selectedItem.id]?.text || ''}
-                    onChange={(e) => addNote(selectedItem.id, e.target.value)}
-                    className="w-full p-2 rounded-lg glass border border-white/10 text-[10px] resize-none h-20 focus:outline-none"
-                    style={{
-                      borderColor: notes[selectedItem.id]?.text ? theme.primary : undefined
-                    }}
-                  />
-                </div>
-              )}
-
-              <div className="border border-white/5 rounded-xl overflow-hidden glass">
-                <button 
-                  onClick={() => setIsDescOpen(!isDescOpen)}
-                  className="w-full flex items-center justify-between p-3 hover:bg-white/5 transition-colors"
-                >
-                  <p className="text-[8px] font-black uppercase" style={{ color: theme.primary }}>
-                    📝 Описание
-                  </p>
-                  <span style={{ 
-                    color: theme.primary,
-                    transform: isDescOpen ? 'rotate(180deg)' : 'rotate(0deg)',
-                    transition: 'transform 0.3s'
-                  }}>
-                    ▼
-                  </span>
-                </button>
-                {isDescOpen && (
-                  <div className="p-3 pt-0 border-t border-white/5">
-                    <div 
-                      className="text-[10px] text-white/70 leading-relaxed max-h-40 overflow-y-auto no-scrollbar prose prose-invert"
-                      dangerouslySetInnerHTML={{ 
-                        __html: selectedItem?.description || '<span class="opacity-50 italic">Загрузка...</span>' 
-                      }}
-                    />
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="flex-1 bg-black flex items-center justify-center order-1 lg:order-2 relative">
-              {selectedItem.kind === 'manga' ? (
-                <div className="w-full h-full overflow-y-auto flex flex-col items-center py-8 no-scrollbar">
-                  <img 
-                    src={getImg(selectedItem)} 
-                    className="w-48 md:w-60 rounded-2xl border-4 mb-4 shadow-2xl" 
-                    style={{ borderColor: theme.primary }}
-                    alt="" 
-                  />
-                  <a 
-                    href={`https://shikimori.one${selectedItem.url}`} 
-                    target="_blank" 
-                    rel="noreferrer" 
-                    className="px-8 py-3 rounded-xl font-black uppercase hover:scale-105 transition-transform text-white text-sm"
-                    style={{
-                      background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`
-                    }}
-                  >
-                    📖 Читать на Shikimori
-                  </a>
-                </div>
-              ) : (
-                <div className="w-full h-full">
-                  <iframe 
-                    src={`https://kodik.info/find-player?shikimoriID=${selectedItem.id}`} 
-                    className="w-full h-full border-0" 
-                    allowFullScreen 
-                    allow="autoplay; fullscreen"
-                    title="Anime Player"
-                  />
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Compact Profile Modal */}
-      {isProfileModalOpen && isLoggedIn && (
-        <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/95 backdrop-blur-3xl animate-fade-in overflow-y-auto">
-          <div className="relative w-full max-w-lg glass-strong rounded-2xl p-6 border border-white/10 my-8">
-            <button 
-              onClick={() => setIsProfileModalOpen(false)} 
-              className="absolute top-4 right-4 text-xl opacity-50 hover:opacity-100 transition-opacity z-10"
-            >
-              ×
-            </button>
-            
-            <div className="relative w-20 h-20 mx-auto mb-3 group">
-              <div 
-                className="absolute inset-0 rounded-2xl blur-md opacity-40"
-                style={{ background: theme.primary }}
-              />
-              <img 
-                src={user.avatar} 
-                className="relative w-full h-full rounded-2xl object-cover border-4 z-10" 
-                style={{ borderColor: theme.primary }}
-                alt="avatar" 
-              />
-              <input type="file" ref={fileInputRef} onChange={handleAvatarChange} className="hidden" accept="image/*" />
-              <button 
-                onClick={() => fileInputRef.current.click()} 
-                className="absolute -bottom-1 -right-1 w-8 h-8 rounded-lg flex items-center justify-center z-20 shadow-xl hover:scale-110 transition-transform text-sm"
-                style={{ background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})` }}
-              >
-                📸
-              </button>
-            </div>
-
-            <div className="space-y-0.5 mb-4 text-center">
-              <input 
-                type="text" 
-                value={user.name} 
-                onChange={(e) => setUser({ ...user, name: e.target.value })} 
-                className="w-full bg-transparent font-black uppercase text-center text-lg outline-none border-b border-transparent focus:border-white/10 text-white" 
-                maxLength={20}
-              />
-              <p 
-                className={`text-[10px] font-black uppercase tracking-wider ${userStats.rank.color}`}
-              >
-                {userStats.rank.badge} {userStats.rank.label}
-              </p>
-              <p className="text-[10px] opacity-50">
-                {new Date(user.joinDate).toLocaleDateString('ru-RU')}
-              </p>
-              <p className="text-[10px] font-black" style={{ color: theme.secondary }}>
-                🔥 Серия: {user.loginStreak} {user.loginStreak === 1 ? 'день' : 'дней'}
-              </p>
-            </div>
-
-            <div className="glass-strong p-4 rounded-xl border border-white/10 mb-4">
-              <div className="flex justify-between items-end mb-2">
-                <div>
-                  <p className="text-[7px] font-black text-white/30 uppercase">Уровень</p>
-                  <p className="text-xl font-black" style={{ color: theme.primary }}>
-                    {userStats.level}
-                  </p>
-                </div>
-                <div className="text-right">
-                  <p className="text-[7px] font-black text-white/30 uppercase">Опыт</p>
-                  <p className="text-xs font-black" style={{ color: theme.secondary }}>
-                    {userStats.xp} / 100
-                  </p>
-                </div>
-              </div>
-
-              <div className="h-2 bg-black/50 rounded-full overflow-hidden p-[2px]">
-                <div 
-                  className="h-full rounded-full transition-all duration-1000"
-                  style={{ 
-                    width: `${(userStats.xp / 100) * 100}%`,
-                    background: `linear-gradient(90deg, ${theme.primary}, ${theme.secondary})`
-                  }} 
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-3 gap-2 mb-4">
-              {[
-                { label: 'Завершено', value: userStats.totalWatched, icon: '✅' },
-                { label: 'Смотрю', value: userStats.watchingNow, icon: '👁️' },
-                { label: 'Часов', value: userStats.totalHours, icon: '⏱️' },
-                { label: 'Оценено', value: userStats.totalRated, icon: '⭐' },
-                { label: 'Избранное', value: favorites.length, icon: '❤️' },
-                { label: 'Заметок', value: userStats.totalNotes, icon: '📝' }
-              ].map((stat, i) => (
-                <div 
-                  key={i}
-                  className="glass p-2 rounded-xl border border-white/5 hover:scale-105 transition-all"
-                >
-                  <p className="text-[7px] font-black text-white/30 uppercase text-left">{stat.label}</p>
-                  <div className="flex items-center gap-1">
-                    <span className="text-sm">{stat.icon}</span>
-                    <p className="text-sm font-black text-white">{stat.value}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="space-y-2 mb-4">
-              <h4 className="text-[10px] font-black uppercase opacity-50">
-                Достижения ({achievements.length}/{ACHIEVEMENTS.length})
-              </h4>
-              <div className="grid grid-cols-3 gap-2 max-h-32 overflow-y-auto no-scrollbar">
-                {ACHIEVEMENTS.map(ach => (
-                  <div
-                    key={ach.id}
-                    className={`p-2 rounded-lg border transition-all ${
-                      achievements.includes(ach.id)
-                        ? 'glass-strong border-white/20'
-                        : 'bg-white/5 border-white/5 opacity-40'
-                    }`}
-                  >
-                    <div className="text-lg mb-0.5">{ach.icon}</div>
-                    <p className="text-[8px] font-black uppercase leading-tight">{ach.name}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="flex gap-2">
-              <button
-                onClick={exportData}
-                className="flex-1 py-2.5 rounded-lg glass hover:scale-105 transition-all font-black uppercase text-[10px]"
-              >
-                💾 Экспорт
-              </button>
-              <label className="flex-1">
-                <input type="file" onChange={importData} className="hidden" accept=".json" />
-                <div className="py-2.5 rounded-lg glass hover:scale-105 transition-all font-black uppercase text-[10px] text-center cursor-pointer">
-                  📥 Импорт
-                </div>
-              </label>
-              <button
-                onClick={handleLogout}
-                className="flex-1 py-2.5 rounded-lg bg-red-500/20 border-2 border-red-500 text-red-500 hover:bg-red-500 hover:text-white font-black uppercase text-[10px] transition-all"
-              >
-                🚪 Выйти
-              </button>
-            </div>
-
-            <button
-              onClick={deleteAccount}
-              className="w-full mt-2 py-2 rounded-lg bg-red-900/30 border border-red-900 text-red-400 hover:bg-red-900 hover:text-white font-black uppercase text-[9px] transition-all"
-            >
-              ⚠️ Удалить аккаунт
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Settings Modal - Compact */}
-      {isSettingsOpen && (
-        <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/95 backdrop-blur-3xl animate-fade-in overflow-y-auto">
-          <div className="relative w-full max-w-md glass-strong rounded-2xl p-6 border border-white/10 my-8">
-            <button 
-              onClick={() => setIsSettingsOpen(false)} 
-              className="absolute top-4 right-4 text-xl opacity-50 hover:opacity-100 transition-opacity"
-            >
-              ×
-            </button>
-            
-            <h2 className="text-xl font-black uppercase mb-6 text-gradient">
-              ⚙️ Настройки
-            </h2>
-
-            <div className="space-y-3 mb-6">
-              <h3 className="text-[10px] font-black uppercase opacity-50">Тема</h3>
-              <div className="grid grid-cols-4 gap-2">
-                {Object.entries(THEMES).map(([key, t]) => (
-                  <button
-                    key={key}
-                    onClick={() => setCurrentTheme(key)}
-                    className={`p-3 rounded-xl border-2 transition-all ${
-                      currentTheme === key ? 'scale-105' : 'border-white/10 opacity-60'
-                    }`}
-                    style={{
-                      background: currentTheme === key ? `linear-gradient(135deg, ${t.primary}, ${t.secondary})` : 'rgba(255,255,255,0.05)',
-                      borderColor: currentTheme === key ? t.primary : undefined
-                    }}
-                  >
-                    <div className="text-xl mb-0.5">{t.icon}</div>
-                    <p className="text-[8px] font-black uppercase">{t.name}</p>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between p-3 glass rounded-xl mb-3">
-              <div>
-                <p className="text-xs font-black uppercase">Темный режим</p>
-                <p className="text-[9px] opacity-50">Переключить тему</p>
-              </div>
-              <button
-                onClick={() => setIsDarkMode(!isDarkMode)}
-                className={`w-12 h-6 rounded-full transition-all ${
-                  isDarkMode ? 'bg-gradient-to-r' : 'bg-white/20'
-                }`}
-                style={{
-                  backgroundImage: isDarkMode ? `linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` : undefined
-                }}
-              >
-                <div className={`w-5 h-5 rounded-full bg-white transition-transform ${
-                  isDarkMode ? 'translate-x-6' : 'translate-x-0.5'
-                }`} />
-              </button>
-            </div>
-
-            <div className="flex items-center justify-between p-3 glass rounded-xl mb-3">
-              <div>
-                <p className="text-xs font-black uppercase">Автовоспроизведение</p>
-                <p className="text-[9px] opacity-50">Показывать последнее</p>
-              </div>
-              <button
-                onClick={() => setAutoPlay(!autoPlay)}
-                className={`w-12 h-6 rounded-full transition-all ${
-                  autoPlay ? 'bg-gradient-to-r' : 'bg-white/20'
-                }`}
-                style={{
-                  backgroundImage: autoPlay ? `linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` : undefined
-                }}
-              >
-                <div className={`w-5 h-5 rounded-full bg-white transition-transform ${
-                  autoPlay ? 'translate-x-6' : 'translate-x-0.5'
-                }`} />
-              </button>
-            </div>
-
-            {isLoggedIn && (
-              <>
-                <div className="p-3 glass rounded-xl mb-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-xs font-black uppercase">Дневная цель</p>
-                    <span className="text-xs font-black" style={{ color: theme.primary }}>
-                      {dailyGoal} аниме/день
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min="1"
-                    max="10"
-                    value={dailyGoal}
-                    onChange={(e) => setDailyGoal(parseInt(e.target.value))}
-                    className="w-full h-2 rounded-full"
-                    style={{
-                      background: `linear-gradient(90deg, ${theme.primary}, ${theme.secondary})`
-                    }}
-                  />
-                </div>
-
-                <div className="p-3 glass rounded-xl mb-3">
-                  <p className="text-xs font-black uppercase mb-2">Информация</p>
-                  <div className="space-y-1 text-[10px]">
-                    <div className="flex justify-between">
-                      <span className="opacity-70">Логин:</span>
-                      <span className="font-black">{currentAccount}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="opacity-70">XP:</span>
-                      <span className="font-black" style={{ color: theme.primary }}>{userStats.totalXp}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="opacity-70">В библиотеке:</span>
-                      <span className="font-black">{userStats.librarySize}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="opacity-70">Входов:</span>
-                      <span className="font-black">{user.totalLogins}</span>
-                    </div>
-                  </div>
-                </div>
-              </>
-            )}
-
-            <button
-              onClick={() => {
-                if (confirm('Очистить кэш браузера?')) {
-                  localStorage.clear();
-                  sessionStorage.clear();
-                  window.location.reload();
-                }
-              }}
-              className="w-full py-3 rounded-xl bg-orange-500/20 border-2 border-orange-500 text-orange-500 font-black uppercase text-xs hover:bg-orange-500 hover:text-white transition-all"
-            >
-              🗑️ Очистить кэш
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Achievement Notification - Compact */}
-      {showAchievement && (
-        <div className="fixed top-20 right-4 z-[10001] animate-slide-in-right max-w-xs">
-          <div 
-            className="p-4 rounded-xl border-2 glass-strong backdrop-blur-xl shadow-2xl"
-            style={{
-              borderColor: theme.primary,
-              boxShadow: `0 0 30px ${theme.primary}80`
-            }}
-          >
-            <div className="flex items-center gap-3">
-              <div 
-                className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl"
-                style={{ background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})` }}
-              >
-                {showAchievement.icon}
-              </div>
-              <div>
-                <p className="text-[8px] font-black uppercase opacity-50 mb-0.5">Достижение!</p>
-                <h4 className="text-sm font-black uppercase mb-0.5">{showAchievement.name}</h4>
-                <p className="text-[10px] opacity-70">{showAchievement.desc}</p>
-                <p className="text-[10px] font-black mt-1" style={{ color: theme.primary }}>
-                  +{showAchievement.xp} XP
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Continue Watching Toast - Compact */}
-      {showToast && history.length > 0 && autoPlay && (
-        <div className="fixed bottom-4 right-4 z-[1000] animate-slide-in-right w-72">
-          <div 
-            onClick={() => { setSelectedItem(history[0]); setShowToast(false); }}
-            className="p-3 rounded-xl border-2 flex items-center gap-3 cursor-pointer hover:scale-105 transition-all glass-strong"
-            style={{
-              borderColor: theme.primary,
-              boxShadow: `0 10px 30px ${theme.primary}40`
-            }}
-          >
-            <div className="w-10 h-14 shrink-0 rounded-lg overflow-hidden border border-white/10">
-              <img src={getImg(history[0])} className="w-full h-full object-cover" alt="" />
-            </div>
-            <div className="flex-1 overflow-hidden">
-              <p 
-                className="text-[8px] font-black uppercase mb-0.5"
-                style={{ color: theme.primary }}
-              >
-                ▶️ Продолжить?
-              </p>
-              <h4 className="text-[10px] font-black truncate uppercase text-white">
-                {history[0].russian || history[0].name}
-              </h4>
-              <p className="text-[8px] opacity-50 mt-0.5">
-                {history[0].date}
-              </p>
-            </div>
-            <button 
-              onClick={(e) => { e.stopPropagation(); setShowToast(false); }} 
-              className="text-lg p-1 transition-colors text-white/40 hover:text-white"
-            >
-              ×
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Footer - Compact */}
-      <footer className="mt-16 py-12 border-t border-white/5 text-center glass">
-        <div className="max-w-4xl mx-auto px-6">
-          <h2 className="text-2xl font-black uppercase mb-3 text-gradient">
-            ANI<span style={{ color: theme.primary }}>HUB</span>
-          </h2>
-          <p className="text-xs opacity-70 mb-3">
-            Ваш портал в мир аниме 🌟
-          </p>
-          <div className="flex justify-center gap-4 mb-4">
-            <a href="https://t.me/Sh1zoK1ll" target="_blank" rel="noreferrer" className="opacity-50 hover:opacity-100 transition-opacity hover:scale-110">
-              <span className="text-2xl">✈️</span>
-            </a>
-          </div>
-          {isLoggedIn && (
-            <p className="text-xs opacity-50 mb-2">
-              <span className="font-black" style={{ color: theme.primary }}>{user.name}</span> • Уровень {userStats.level}
-            </p>
-          )}
-          <p className="text-[9px] font-black uppercase tracking-wider opacity-20">
-            © 2026 @Sh1zoK1ll
-          </p>
-          <p className="text-[8px] opacity-30 mt-1">
-            Shikimori API • {STORAGE_VERSION}
-          </p>
-        </div>
+      {/* Footer desktop */}
+      <footer className="desk" style={{borderTop:'1px solid rgba(255,255,255,.06)',padding:'24px 18px',flexDirection:'column',gap:4,marginTop:16,textAlign:'center',position:'relative',zIndex:2}}>
+        <p style={{fontSize:16,fontWeight:900,background:`linear-gradient(135deg,${theme.p},white)`,WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>AniHub</p>
+        <p style={{fontSize:11,color:'rgba(255,255,255,.16)'}}>© 2026 · {VER} · Premium Anime Platform · Powered by Shikimori</p>
       </footer>
     </div>
   );
-};
-
-// ==================== AUTH FORM COMPONENT ====================
-const AuthForm = ({ mode, onLogin, onRegister, theme, isDarkMode, rememberMe, setRememberMe }) => {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [email, setEmail] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    if (mode === 'login') {
-      onLogin(username, password);
-    } else {
-      onRegister(username, password, email);
-    }
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="space-y-3">
-      <div>
-        <label className="block text-[10px] font-black uppercase mb-1.5 opacity-70">
-          Имя пользователя *
-        </label>
-        <input
-          type="text"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          className="w-full p-3 rounded-xl glass border-2 border-transparent focus:border-white/20 outline-none text-white font-bold transition-all text-sm"
-          style={{
-            borderColor: username ? theme.primary : undefined
-          }}
-          placeholder="Введите имя"
-          required
-          minLength={3}
-          maxLength={20}
-        />
-      </div>
-
-      {mode === 'register' && (
-        <div>
-          <label className="block text-[10px] font-black uppercase mb-1.5 opacity-70">
-            Email (опционально)
-          </label>
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="w-full p-3 rounded-xl glass border-2 border-transparent focus:border-white/20 outline-none text-white font-bold text-sm"
-            placeholder="email@example.com"
-          />
-        </div>
-      )}
-
-      <div>
-        <label className="block text-[10px] font-black uppercase mb-1.5 opacity-70">
-          Пароль *
-        </label>
-        <div className="relative">
-          <input
-            type={showPassword ? 'text' : 'password'}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="w-full p-3 pr-10 rounded-xl glass border-2 border-transparent focus:border-white/20 outline-none text-white font-bold transition-all text-sm"
-            style={{
-              borderColor: password ? theme.secondary : undefined
-            }}
-            placeholder="Введите пароль"
-            required
-            minLength={6}
-          />
-          <button
-            type="button"
-            onClick={() => setShowPassword(!showPassword)}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-lg opacity-50 hover:opacity-100 transition-opacity"
-          >
-            {showPassword ? '🙈' : '👁️'}
-          </button>
-        </div>
-      </div>
-
-      {mode === 'login' && (
-        <div className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            id="remember"
-            checked={rememberMe}
-            onChange={(e) => setRememberMe(e.target.checked)}
-            className="w-4 h-4 rounded"
-          />
-          <label htmlFor="remember" className="text-xs opacity-70 cursor-pointer">
-            Запомнить меня
-          </label>
-        </div>
-      )}
-
-      <button
-        type="submit"
-        className="w-full py-3 rounded-xl font-black uppercase text-sm text-white hover:scale-105 transition-all"
-        style={{
-          background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`
-        }}
-      >
-        {mode === 'login' ? '🔐 Войти' : '✨ Зарегистрироваться'}
-      </button>
-    </form>
-  );
-};
-
-export default App;
+}
