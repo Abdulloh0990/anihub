@@ -1637,10 +1637,13 @@ export default function App() {
   }, [isAuth, xpToday]);
 
   /* ── Achievements ── */
+  const achsRef = useRef([]);
   const unlockAch = useCallback((id) => {
     if (!isAuth) return;
+    if (achsRef.current.includes(id)) return; // quick check without setState
     setAchs(prev => {
       if (prev.includes(id)) return prev;
+      achsRef.current = [...prev, id];
       const a = ACHS.find(x => x.id === id); if (!a) return prev;
       setUser(u => ({ ...u, xp:u.xp + a.xp }));
       setAchPop(a); setTimeout(() => setAchPop(null), 4200);
@@ -1663,6 +1666,19 @@ export default function App() {
     const genreSet = new Set(libV.filter(a => a.status==='completed').flatMap(a => a.genres?.map(g => g.id) ?? []));
     return { level:lv, xpInLvl:user.xp%100, watched, watching, planned, rated, avgRating:avg, hours:Math.round(watched*4.5), notes:notesCnt, perf10, genres:genreSet.size, libSize:Object.keys(library).length };
   }, [user.xp, library, ratings, notes]);
+
+  /* ── Auth guard for protected views ── */
+  const PROTECTED_VIEWS = useMemo(() => new Set(['library','history','watchlist','favs','stats']), []);
+  useEffect(() => {
+    if (!isAuth && PROTECTED_VIEWS.has(view)) {
+      setView('home');
+      toast('🔐 Войдите, чтобы получить доступ к этому разделу', 'warning');
+      setAuthOpen(true);
+    }
+  }, [view, isAuth]);
+
+  /* ── Auth guard: защищённые разделы ── */
+  // ...existing code...
 
   /* ── Ach triggers ── */
   useEffect(() => {
@@ -1692,7 +1708,9 @@ export default function App() {
     setLibrary(data.library ?? {});
     setHistD(data.history ?? []);
     setRatings(data.ratings ?? {});
-    setAchs(data.achs ?? []);
+    const loadedAchs = data.achs ?? [];
+    achsRef.current = loadedAchs;
+    setAchs(loadedAchs);
     setFavs(data.favs ?? []);
     setNotes(data.notes ?? {});
     setWl(data.wl ?? []);
@@ -1721,7 +1739,7 @@ export default function App() {
       const data = await sb.getData(sess.access_token, sess.user_id);
       if (data) {
         applyUserData(data, sess);
-        toast(`С возвращением, ${data.user?.name || sbName}! 🎉`);
+        toast(`С возвращением, ${data.user?.name || sbName}! 👋`);
       } else {
         // New user
         const newUser = mkUser(sbName);
@@ -2292,23 +2310,51 @@ export default function App() {
         </main>
       </div>
 
-      {/* Mobile bottom nav */}
-      <nav className="bot-nav" style={{ position:'fixed', bottom:0, left:0, right:0, zIndex:600, background:`${theme.b}f5`, backdropFilter:'blur(24px) saturate(200%)', borderTop:'1px solid rgba(255,255,255,.08)', paddingBottom:'env(safe-area-inset-bottom,0px)', flexDirection:'row' }}>
-        <div style={{ display:'flex', justifyContent:'space-around', padding:'7px 4px' }}>
-          {[{ k:'home',l:'Главная',i:'⊞' },{ k:'trending',l:'Тренды',i:'📈' },{ k:'favs',l:'Изб.',i:'♥' },{ k:'library',l:'Моё',i:'◈' },{ k:'stats',l:'Статы',i:'📊' }].map(v => (
-            <button key={v.k} onClick={() => setView(v.k)} style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:2, padding:'4px 10px', borderRadius:12, border:'none', cursor:'pointer', fontFamily:'inherit', background:view===v.k?`${theme.p}1e`:'transparent', color:view===v.k?theme.p:'rgba(255,255,255,.26)', transition:'all .2s', minWidth:50 }}>
-              <span style={{ fontSize:18 }}>{v.i}</span>
+ {/* Mobile bottom nav - Faqat mobil qurilmalarda va centerda */}
+      <nav className="bot-nav md:hidden" style={{ 
+        position:'fixed', bottom:0, left:0, right:0, zIndex:600, 
+        background:`${theme.b}f5`, backdropFilter:'blur(24px) saturate(200%)', 
+        borderTop:'1px solid rgba(255,255,255,.08)', 
+        paddingBottom:'env(safe-area-inset-bottom,0px)', 
+        display:'flex', justifyContent:'center' 
+      }}>
+        <div style={{ 
+          display:'flex', justifyContent:'center', alignItems:'center', 
+          padding:'7px 10px', width:'100%', maxWidth:'450px' 
+        }}>
+          {[
+            { k:'home', l:'Главная', svg:'M208,120v88a16,16,0,0,1-16,16H160a16,16,0,0,1-16-16V160H112v48a16,16,0,0,1-16,16H64a16,16,0,0,1-16-16V120a8,8,0,0,1,2.34-5.66l72-72a8,8,0,0,1,11.32,0l72,72A8,8,0,0,1,208,120Z' },
+            { k:'trending', l:'Тренды', svg:'M232,128a8,8,0,0,1-8,8H203.31l-34.65,57.75a8,8,0,0,1-13.32.8L120,144.3,85.33,196A8,8,0,0,1,72,200H32a8,8,0,0,1,0-16H65.33l34.67-52a8,8,0,0,1,13.31-.8L148,167.7l34.67-57.75A8,8,0,0,1,196,104h28A8,8,0,0,1,232,128Z' },
+            { k:'manga', l:'Манга', svg:'M208,32H48A16,16,0,0,0,32,48V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V48A16,16,0,0,0,208,32ZM160,192H96a8,8,0,0,1,0-16h64a8,8,0,0,1,0,16Zm0-32H96a8,8,0,0,1,0-16h64a8,8,0,0,1,0,16Zm0-32H96a8,8,0,0,1,0-16h64a8,8,0,0,1,0,16Z' },
+            { k:'favs', l:'Изб.', svg:'M128,216a8,8,0,0,1-5.66-2.34l-80-80a56,56,0,0,1,79.2-79.16l6.46,6.46,6.46-6.46a56,56,0,0,1,79.2,79.16l-80,80A8,8,0,0,1,128,216Z' },
+            { k:'library', l:'Моё', svg:'M184,32H72A16,16,0,0,0,56,48V224a8,8,0,0,0,12.24,6.78L128,193.43l59.76,37.35A8,8,0,0,0,200,224V48A16,16,0,0,0,184,32Z' },
+          ].map(v => (
+            <button key={v.k} onClick={() => setView(v.k)} style={{ 
+              display:'flex', flexDirection:'column', alignItems:'center', flex:1, gap:3, 
+              background:view===v.k?`${theme.p}1e`:'transparent', 
+              color:view===v.k?theme.p:'rgba(255,255,255,.26)', 
+              border:'none', borderRadius:14, padding:'6px 0', transition:'all .2s'
+            }}>
+              <svg width="20" height="20" fill={view===v.k ? theme.p : "currentColor"} viewBox="0 0 256 256">
+                <path d={v.svg}></path>
+              </svg>
               <span style={{ fontSize:9, fontWeight:800 }}>{v.l}</span>
             </button>
           ))}
+
           {isAuth ? (
-            <button onClick={() => setProfOpen(true)} style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:2, padding:'4px 10px', borderRadius:12, border:'none', cursor:'pointer', fontFamily:'inherit', background:'transparent', transition:'all .2s', minWidth:50 }}>
-              <img src={user.avatar} alt="" style={{ width:22, height:22, borderRadius:7, objectFit:'cover', border:`1.5px solid ${theme.p}`, display:'block' }}/>
-              <span style={{ fontSize:9, fontWeight:800, color:'rgba(255,255,255,.26)' }}>Профиль</span>
+            <button onClick={() => setProfOpen(true)} style={{ display:'flex', flexDirection:'column', alignItems:'center', flex:1, gap:3, background:'transparent', border:'none' }}>
+              <img src={user.avatar} style={{ width:20, height:20, borderRadius:6, objectFit:'cover', border: `1.5px solid ${theme.p}` }}/>
+              <span style={{ fontSize:9, fontWeight:800, color:'rgba(255,255,255,.26)' }}>Проф.</span>
             </button>
           ) : (
-            <button onClick={() => setAuthOpen(true)} style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:2, padding:'4px 10px', borderRadius:12, border:'none', cursor:'pointer', fontFamily:'inherit', background:`${theme.p}1e`, color:theme.p, transition:'all .2s', minWidth:50 }}>
-              <span style={{ fontSize:18 }}>◉</span>
+            <button onClick={() => setAuthOpen(true)} style={{ 
+              display:'flex', flexDirection:'column', alignItems:'center', flex:1, gap:3, 
+              background:`${theme.p}1e`, color:theme.p, border:'none', borderRadius:14, padding:'6px 0' 
+            }}>
+              <svg width="20" height="20" fill="currentColor" viewBox="0 0 256 256">
+                <path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,192a88,88,0,1,1,88-88A88.1,88.1,0,0,1,128,216Zm48-88a8,8,0,0,1-8,8H136v32a8,8,0,0,1-16,0V136H88a8,8,0,0,1,0-16h32V88a8,8,0,0,1,16,0v32h32A8,8,0,0,1,176,128Z"></path>
+              </svg>
               <span style={{ fontSize:9, fontWeight:800 }}>Войти</span>
             </button>
           )}
